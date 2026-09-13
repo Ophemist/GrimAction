@@ -63,6 +63,11 @@ Copy-Item -LiteralPath (Join-Path $projectRoot 'docs\ANTIVIRUS.md') -Destination
 Copy-Item -LiteralPath (Join-Path $projectRoot 'LICENSE') -Destination (Join-Path $stage 'LICENSE.txt')
 Copy-Item -LiteralPath (Join-Path $projectRoot 'THIRD-PARTY-NOTICES.txt') -Destination $stage
 Copy-Item -LiteralPath (Join-Path $projectRoot 'extras\reshade\ThirdPersonDot.fx') -Destination $reshadeDir
+$cursorDir = Join-Path $stage 'extras\dot-cursor'
+New-Item -ItemType Directory -Force -Path $cursorDir | Out-Null
+foreach ($name in 'Set-HiddenHandCursor.ps1', 'Dot Cursor.cmd', 'Restore Hand Cursor.cmd') {
+    Copy-Item -LiteralPath (Join-Path $projectRoot "extras\hidden-hand-cursor\$name") -Destination $cursorDir
+}
 
 # Settings are the release's live-accepted file with a short header; the player may edit them, so they are not hashed.
 $utf8 = [System.Text.UTF8Encoding]::new($false)

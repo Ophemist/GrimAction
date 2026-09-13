@@ -3,15 +3,16 @@
 GrimAction adds an over-the-shoulder, mouse-look camera to Grim Dawn. Movement stays the game's own WASD (or controller)
 movement. Press F8 in game to switch between the normal camera and third person.
 
-Nothing is installed. GrimAction never copies files into the Grim Dawn folder or changes game files. You start it after the
-game reaches the main menu, and it is gone when you quit the game.
+Nothing is installed. GrimAction never copies files into the Grim Dawn folder or changes game files (the optional dot
+cursor below is the one exception, and only if you run it). You start it after the game reaches the main menu, and it is
+gone when you quit the game.
 
 ## Requirements
 
 - Grim Dawn on Steam, **64-bit**, at the game version this release supports (see "Supported game version" below).
 - Windows 10 or 11, 64-bit.
 - Nothing else. The download includes everything it needs (no .NET install).
-- Optional: ReShade, for the center dot shown in "Aim dot" below.
+- Optional: the dot cursor (below) replaces the game's hand cursor with a small dot.
 
 ## Install
 
@@ -50,8 +51,7 @@ You need WASD movement: in the game options, turn on movement with the keyboard 
 
 ## Known limits
 
-- **The game's hand cursor stays visible** in third person. The game draws it itself, so GrimAction can't hide it. See "Aim
-  dot" for an optional ReShade overlay.
+- **The game's hand cursor stays visible** in third person unless you apply the optional dot cursor (below).
 - **Controller:** a controller works with the game's own controller camera. The right stick turns but does not tilt the
   camera up and down.
 - **After an NPC dialog** the cursor stays free until you move; moving puts it back to mouse look.
@@ -67,7 +67,7 @@ You need WASD movement: in the game options, turn on movement with the keyboard 
 ## Settings
 
 Settings live in `settings\runtime.ini`. Open it in Notepad, change a value, save, and run Start GrimAction. Start
-GrimAction checks the file first and tells you which line is wrong. Every key must stay in the file. Lines starting with `;`
+GrimAction checks the file first and refuses to start if a value is malformed or out of range. Every key must stay in the file. Lines starting with `;`
 are comments. If you break something, copy `settings\runtime.default.ini` over `runtime.ini`.
 
 Settings are read once, when GrimAction starts. To apply a change, quit the game, relaunch, and start GrimAction again.
@@ -97,16 +97,27 @@ values stop F8 from switching back), `virtual_zoom_engine_distance`, the `collis
 (fixed in this version: F8, starting in the normal camera). `mouse_look_dot_cursor` and the `right_stick_pitch_*` keys are
 reserved for features that don't work yet; leave them `false`.
 
-## Aim dot (optional, ReShade)
+## Dot cursor (optional)
 
-GrimAction can't replace the game's cursor, but ReShade can draw a small dot where you aim. `extras\reshade\ThirdPersonDot.fx`
-is a small effect for that:
+GrimAction itself can't hide the game's cursor. Grim Dawn draws it from a texture, and the dot cursor extra swaps that
+texture's hand for a small white dot at the exact spot you click. The game uses the same hand in menus, so the dot is your
+pointer everywhere. The attack sword, NPC dialog bubble and merchant bag cursors are unchanged.
 
-1. Copy `ThirdPersonDot.fx` into your ReShade shaders folder (usually `Grim Dawn\x64\reshade-shaders\Shaders`).
-2. In game, open the ReShade overlay (Home key), and enable **ThirdPersonDot**. Adjust its size, outline and color.
-3. Optional: assign the effect a toggle key in ReShade. Binding it to F8 turns the dot on and off with the camera.
+1. Close Grim Dawn.
+2. Double-click `extras\dot-cursor\Dot Cursor.cmd`.
 
-This is the only step that puts a file in the game folder, and it belongs to ReShade, not GrimAction.
+To undo, double-click `Restore Hand Cursor.cmd`, or use Steam: Grim Dawn > Properties > Installed Files > Verify integrity
+of game files.
+
+Unlike the rest of GrimAction, this **edits a game file**: `resources\UI.arc`. It uses the game's own ArchiveTool, changes
+only the two hand-cursor images, checks the result, and keeps a backup of the original in `extras\dot-cursor\backup`. A
+Grim Dawn update or a Steam file check may put the hand back; run it again afterwards. The download contains no game art:
+the dot is drawn into your own copy of the texture.
+
+Prefer an overlay? `Set-HiddenHandCursor.ps1 -Style Blank` removes the hand entirely, and the ReShade effect
+`extras\reshade\ThirdPersonDot.fx` draws a dot at the mouse instead. Copy it into your ReShade shaders folder (usually
+`Grim Dawn\x64\reshade-shaders\Shaders`), open the ReShade overlay (Home) and enable **ThirdPersonDot**. Keep it on all the
+time, since the blank cursor is blank in menus too.
 
 ## Safety and what it does
 
@@ -114,7 +125,8 @@ GrimAction is a DLL that is loaded into the running game (DLL injection) and adj
 
 - checks that your installed game files exactly match the version it was built for, and refuses to load otherwise;
 - only changes camera values, and moves the mouse cursor while mouse look is active;
-- never connects to the internet and never changes files on disk, apart from its own log files;
+- never connects to the internet and never changes files on disk, apart from its own log files (the optional dot cursor
+  extra is the one exception, and only when you run it);
 - can't be unloaded while the game runs. Stop turns it off; quitting the game removes it.
 
 The source code is public, and every file in this download is listed with its SHA-256 hash in `bin\package-manifest.json`.
@@ -127,8 +139,9 @@ only.
 
 ## Uninstall
 
-Delete the GrimAction folder. If you added the ReShade dot, delete `ThirdPersonDot.fx` from the ReShade shaders folder. If
-you added an antivirus exclusion, remove it.
+If you applied the dot cursor, run `Restore Hand Cursor.cmd` first (or verify game files in Steam). Then delete the
+GrimAction folder. If you added the ReShade dot, delete `ThirdPersonDot.fx` from the ReShade shaders folder. If you added an
+antivirus exclusion, remove it.
 
 ## Troubleshooting
 
