@@ -1,0 +1,8 @@
+artifacts/
+**/bin/
+**/obj/
+.vs/
+*.user
+*.suo
+third_party/detours/bin.X64/
+third_party/detours/lib.X64/

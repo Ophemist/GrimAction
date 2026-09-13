@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "comment": "Runtime images that failed a live gate and must never be injected again. Keyed by SHA-256 so a renamed directory, a copy, or a rebuilt twin cannot evade the refusal. Entries are appended, never removed: a prohibited image stays prohibited. This blocks injection only; logical stop must still work against whatever is actually resident in a process.",
+  "prohibited": [
+    {
+      "runtimeSha256": "f4ee97d73a8cc6c09bab0618dc4d364fd8233ead480c48fd96bd12dec423a1d7",
+      "releases": [
+        "artifacts/releases/gate1/20260911T213125163Z",
+        "artifacts/releases/gate1/20260911T213046548Z"
+      ],
+      "recordedUtc": "2026-09-11",
+      "reason": "Gate 1 attempt 1 failed live visual acceptance: a gray translucent veil and black upper-edge geometry clipping after returning to Native. Its nine-field model did not own the target blend at GameCamera+0x584, so UpdateFromInputImpl drove the current blend toward a stale target; telemetry shows the blend reaching 1.0 in both modes. Rolled back safely and logically stopped. Superseded by the ten-field repair.",
+      "supersededBy": "artifacts/releases/gate1/20260911T220903527Z"
+    },
+    {
+      "runtimeSha256": "d634180426bf21fe8c1c17b15ba828ba134f3ecdf5f91f4e3449437565e0cead",
+      "releases": [
+        "artifacts/releases/collision/20260912T064329769Z",
+        "artifacts/releases/collision/20260912T064247345Z"
+      ],
+      "recordedUtc": "2026-09-12",
+      "reason": "Camera-collision live attempt 1 crashed after F8 activation. The CalculateViewPosition hidden-return ABI was reversed: the engine expects this in RCX, the result buffer in RDX, and input in R8. The first query therefore wrote its WorldVec3 result into the GameCamera object; the next GetRegion virtual dispatch attempted to execute Engine.dll .rdata at RVA 0x342C58. Confirmed by telemetry, minidump, and function disassembly.",
+      "supersededBy": "artifacts/releases/collision/20260912T070731580Z"
+    },
+    {
+      "runtimeSha256": "c4618e5f2fe8df3a8c3087bc01c37c7e297eda41d34d0c5ff47f9cac3e44109a",
+      "releases": [
+        "artifacts/releases/collision/20260912T224549281Z",
+        "artifacts/releases/collision/20260912T224636861Z"
+      ],
+      "recordedUtc": "2026-09-12",
+      "reason": "Never injected; prohibited on source review. guarded_write_target_offset validated GameCamera+0x55c but memcpy'd the value to +0x60, the rejected eye offset, while every read used +0x55c. It would have reproduced the orbit, and relinquishment would never match its own last write, leaving the eye overlay resident after F8 and logical stop.",
+      "supersededBy": "artifacts/releases/collision/20260913T000122171Z"
+    },
+    {
+      "runtimeSha256": "bd7f3f386822aca4e0a22eb2c135270a8c736b5c5107d8060b3152ba9c790d94",
+      "releases": [
+        "artifacts/releases/collision/20260913T180007344Z",
+        "artifacts/releases/collision/20260913T180048063Z"
+      ],
+      "recordedUtc": "2026-09-13",
+      "reason": "NPC dialog build carried a wrong decimal RVA for the unexported ObjectManager lookup (105248 instead of 105760 = 0x19D20). Live injection failed closed at access-point validation (phase 102, hooks 0, writes 0, config not loaded); the player exited normally. Harmless but unusable. The build now verifies internal-code prefixes against the module file.",
+      "supersededBy": "artifacts/releases/collision/20260913T182919787Z"
+    },
+    {
+      "runtimeSha256": "f22ea0ab0f09616cda8b16c76249ce84bc4fff4cd6d8d393195815b656539dc7",
+      "releases": [
+        "artifacts/releases/collision/20260913T214703813Z",
+        "artifacts/releases/collision/20260913T214744720Z"
+      ],
+      "recordedUtc": "2026-09-13",
+      "reason": "Right-stick pitch via in-process XInput polling. Live: XInput never saw the pad (the controller reaches the game through Steam Input) and the game stopped receiving controller input from the first poll until the process exited (input mode never returned to 2). Player quit normally.",
+      "supersededBy": "artifacts/releases/collision/20260913T224125656Z"
+    }
+  ]
+}

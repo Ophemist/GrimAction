@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 1,
+  "builds": [
+    {
+      "id": "steam-24825149-x64",
+      "executableSha256": "5385c7a8b597df6d8cad64660c4aa4f41c27f1224585ff8603203cb78152e40e",
+      "modules": [
+        {
+          "file": "Game.dll",
+          "sha256": "07775a297050e84a846af1182731700614fb8b7bb41cca46b37fd24c90529387",
+          "exports": [
+            {
+              "name": "?GetCamera@GameEngine@GAME@@QEAAPEAVGameCamera@2@XZ",
+              "rva": 2904096,
+              "prefixHex": "488d81b0130000c3"
+            },
+            {
+              "name": "?UpdateFromInputImpl@GameCamera@GAME@@MEAAXXZ",
+              "rva": 2797744,
+              "prefixHex": "40534883ec40488bd9ff15f98c3400"
+            },
+            {
+              "name": "?GetPlayer@GameCamera@GAME@@QEAAPEAVPlayer@2@XZ",
+              "rva": 2797680,
+              "prefixHex": "488b8118010000c3"
+            },
+            {
+              "name": "?GetInputMode@GameEngine@GAME@@QEBA?AW4InputMode@2@XZ",
+              "rva": 2988448,
+              "prefixHex": "8b8118770300c3"
+            },
+            {
+              "name": "?GetMainPlayer@GameEngine@GAME@@QEBAPEAVPlayer@2@XZ",
+              "rva": 2980496,
+              "prefixHex": "40534883ec20488bd9488b89e0400000"
+            },
+            {
+              "name": "?AdjustYaw@GameCamera@GAME@@QEAAXM@Z",
+              "rva": 2802480,
+              "prefixHex": "f30f58899c050000f30f11899c050000c3"
+            },
+            {
+              "name": "?SetCameraYaw@GameCamera@GAME@@UEAAXM@Z",
+              "rva": 2803296,
+              "prefixHex": "40534883ec300f29742420488bd9"
+            },
+            {
+              "name": "?SetZoom@GameCamera@GAME@@QEAAXM@Z",
+              "rva": 2803344,
+              "prefixHex": "40534883ec30f30f109194050000488bd9"
+            },
+            {
+              "name": "?SetCameraFOV@GameEngine@GAME@@QEAAXM@Z",
+              "rva": 3020256,
+              "prefixHex": "f30f590dbc5a49004881c1b013000048ff25ba303100"
+            },
+            {
+              "name": "?GetControllerDirection@ControllerPlayer@GAME@@QEAAXAEAVVec3@2@@Z",
+              "rva": 1362304,
+              "prefixHex": "f20f108158040000f20f11028b8160040000894208"
+            },
+            {
+              "name": "?SetControllerDirection@ControllerPlayer@GAME@@QEAAXAEBVVec3@2@@Z",
+              "rva": 1362272,
+              "prefixHex": "f20f1002f20f1181580400008b4208898160040000"
+            },
+            {
+              "name": "?GetGameController@GameEngine@GAME@@QEAAAEAVGameController@2@XZ",
+              "rva": 2988432,
+              "prefixHex": "488d81f0760300c3"
+            },
+            {
+              "name": "?GetActionSet@GameController@GAME@@QEBA?AW4ActionSet@12@XZ",
+              "rva": 151488,
+              "prefixHex": "8b4108c3"
+            }
+          ],
+          "internalCode": [
+            {
+              "name": "ObjectManager id lookup (unexported; used by CursorHandler::GetPlayerCtrl)",
+              "rva": 105760,
+              "prefixHex": "48895c2408488974241889542410574883ec208bda488bf1"
+            }
+          ],
+          "dataExports": [
+            {
+              "name": "??_7ControllerPlayer@GAME@@6B@",
+              "rva": 7009280
+            },
+            {
+              "name": "??_7ControllerPlayerStateTalkToNpc@GAME@@6B@",
+              "rva": 7417624
+            }
+          ]
+        },
+        {
+          "file": "Engine.dll",
+          "sha256": "9f2042e1fba6c9261c5e9f1e6d60751a49be669fdc687f87d8a082c798fd1ca0",
+          "exports": [
+            {
+              "name": "?GetCoordsUnparented@Entity@GAME@@QEBAAEBVWorldCoords@2@XZ",
+              "rva": 48096,
+              "prefixHex": "488d81d8000000c3"
+            },
+            {
+              "name": "?GetCameraYaw@WorldCamera@GAME@@QEBAMXZ",
+              "rva": 464416,
+              "prefixHex": "f30f10410cc3"
+            },
+            {
+              "name": "?SetCameraYaw@WorldCamera@GAME@@UEAAXM@Z",
+              "rva": 533808,
+              "prefixHex": "f30f11490cc3"
+            },
+            {
+              "name": "?GetCameraPitch@WorldCamera@GAME@@QEBAMXZ",
+              "rva": 464448,
+              "prefixHex": "f30f104110c3"
+            },
+            {
+              "name": "?SetCameraPitch@WorldCamera@GAME@@QEAAXM@Z",
+              "rva": 2267120,
+              "prefixHex": "f30f114910c3"
+            },
+            {
+              "name": "?GetCameraFOV@WorldCamera@GAME@@QEBAMXZ",
+              "rva": 464480,
+              "prefixHex": "f30f104114c3"
+            },
+            {
+              "name": "?SetCameraFOV@WorldCamera@GAME@@QEAAXM@Z",
+              "rva": 2267136,
+              "prefixHex": "f30f114914c3"
+            },
+            {
+              "name": "?GetRegion@WorldCamera@GAME@@QEBAPEAVRegion@2@XZ",
+              "rva": 2263712,
+              "prefixHex": "4883ec48488b01488d542420"
+            },
+            {
+              "name": "?CalculateViewPosition@WorldCamera@GAME@@MEBA?AVWorldVec3@2@AEBV32@@Z",
+              "rva": 2265552,
+              "prefixHex": "48895c24084889742410574883ec60"
+            },
+            {
+              "name": "?GetLevelPtr@Region@GAME@@QEBAPEAVLevel@2@XZ",
+              "rva": 1654688,
+              "prefixHex": "488b4168c3"
+            },
+            {
+              "name": "?GetIntersection@Level@GAME@@QEBAXAEBVRay@2@AEAVIntersection@2@W4PhysicsSurface@2@PEAPEAVEntity@2@MPEBV62@_N@Z",
+              "rva": 1244464,
+              "prefixHex": "488bc4488958084889681048897018"
+            },
+            {
+              "name": "?Get@?$Singleton@VObjectManager@GAME@@@GAME@@SAPEAVObjectManager@2@XZ",
+              "rva": 114752,
+              "prefixHex": "40534883ec3048c7442420feffffff"
+            }
+          ],
+          "dataExports": [
+            {
+              "name": "??_7WinWindow@GAME@@6B@",
+              "rva": 3404960
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
