@@ -114,10 +114,11 @@ only the two hand-cursor images, checks the result, and keeps a backup of the or
 Grim Dawn update or a Steam file check may put the hand back; run it again afterwards. The download contains no game art:
 the dot is drawn into your own copy of the texture.
 
-Prefer an overlay? `Set-HiddenHandCursor.ps1 -Style Blank` removes the hand entirely, and the ReShade effect
-`extras\reshade\ThirdPersonDot.fx` draws a dot at the mouse instead. Copy it into your ReShade shaders folder (usually
-`Grim Dawn\x64\reshade-shaders\Shaders`), open the ReShade overlay (Home) and enable **ThirdPersonDot**. Keep it on all the
-time, since the blank cursor is blank in menus too.
+The texture dot is small. If you use ReShade, the effect `extras\reshade\ThirdPersonDot.fx` draws a larger dot at the mouse
+underneath it, which together reads as a colored ring with a white center. Copy it into your ReShade shaders folder (usually
+`Grim Dawn\x64\reshade-shaders\Shaders`), open the ReShade overlay (Home), enable **ThirdPersonDot**, and set its size and
+color to taste. Keep it on all the time. If you'd rather have only the ReShade dot, run `Set-HiddenHandCursor.ps1 -Style
+Blank` to remove the hand entirely.
 
 ## Safety and what it does
 
