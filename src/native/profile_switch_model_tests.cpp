@@ -227,9 +227,10 @@ int main()
                 access.writes==writes,"a still-modified camera re-armed the toggle");
         }
 
-        // Live-observed case: the session disappears and the game reinitializes the camera itself.
-        // Nothing of ours survives, so the excursion is abandoned, counted, and the toggle keeps
-        // working in the new session instead of latching a permanent fault.
+        // Live-observed case: the session changes and the game reinitializes the camera itself.
+        // Nothing of ours survives, so the excursion is abandoned and counted. The user's mode
+        // intent persists, so the next stable frame re-enters automatically and still restores the
+        // new session's own native bytes exactly when F8 is pressed.
         {
             FakeAccess access; seed(access,native); gdtpc::ProfileSwitchModel model(third_profile, third_fov);
             static_cast<void>(model.step(access,frame(access)));
@@ -245,30 +246,69 @@ int main()
                 access.writes==writes&&access.bytes==reseeded,
                 "an abandoned excursion wrote memory or misreported its state");
             require(model.abandoned_excursion_count()==1,"the abandoned excursion was not counted");
-            // The toggle must work again in the new session, and still restore exactly.
-            static_cast<void>(model.step(access,frame(access,false,true,2)));
-            const auto re_entered=model.step(access,frame(access,true,true,2));
+            const auto re_entered=model.step(access,frame(access,false,true,2));
             require(re_entered.transition==gdtpc::ProfileTransition::entered_third_person&&
                 re_entered.restore_state==gdtpc::ProfileRestoreState::clean,
-                "the toggle did not recover after an abandoned excursion");
-            static_cast<void>(model.step(access,frame(access,false,true,2)));
+                "third person did not re-enter after an abandoned excursion");
             const auto back=model.step(access,frame(access,true,true,2));
             require(back.transition==gdtpc::ProfileTransition::returned_native&&access.bytes==reseeded,
                 "the recovered session did not restore its own native bytes exactly");
             require(model.abandoned_excursion_count()==1,"a clean return was counted as abandoned");
         }
 
-        // Match the actual world-exit integration shape: the engine still confirms the callback
-        // camera for residence inspection, but the player-less session itself is invalid.
+        // A rift/load can temporarily make the player identity invalid before the camera is reset.
+        // Keep the live third-person excursion without reading an invalid player or writing anything;
+        // when the same logical identity returns, mouse look can recapture without an F8 press.
+        {
+            FakeAccess access; seed(access,native); gdtpc::ProfileSwitchModel model(third_profile, third_fov);
+            static_cast<void>(model.step(access,frame(access))); static_cast<void>(model.step(access,frame(access,true)));
+            const auto resident=access.bytes; const auto writes=access.writes;
+            const auto loading=model.step(access,frame(access,false,true,2,0));
+            require(loading.transition==gdtpc::ProfileTransition::none&&loading.dirty&&
+                loading.mode==gdtpc::ProfileMode::third_person&&loading.control_enabled&&
+                access.bytes==resident&&access.writes==writes,
+                "transient player loss dropped or faulted the third-person excursion");
+            const auto resumed=model.step(access,frame(access,false,true,1,3));
+            require(resumed.transition==gdtpc::ProfileTransition::none&&resumed.dirty&&
+                resumed.mode==gdtpc::ProfileMode::third_person&&access.bytes==resident&&access.writes==writes,
+                "the same session did not resume third person after a transient load");
+        }
+
+        // If the game resets the profile during a player-less rift/world load, the confirmed camera
+        // proves every invariant native byte is back. Abandon safely, retain user intent, and apply a
+        // fresh profile from the next valid generation's own exact native preimage.
         {
             FakeAccess access; seed(access,native); gdtpc::ProfileSwitchModel model(third_profile, third_fov);
             static_cast<void>(model.step(access,frame(access))); static_cast<void>(model.step(access,frame(access,true)));
             seed(access,native); const auto game_reinitialized=access.bytes; const auto writes=access.writes;
-            const auto world_exit=model.step(access,frame(access,false,true,2,0));
-            require(world_exit.transition==gdtpc::ProfileTransition::returned_native&&
-                world_exit.restore_state==gdtpc::ProfileRestoreState::abandoned&&!world_exit.dirty&&
+            const auto loading=model.step(access,frame(access,false,true,2,0));
+            require(loading.transition==gdtpc::ProfileTransition::returned_native&&
+                loading.restore_state==gdtpc::ProfileRestoreState::abandoned&&!loading.dirty&&
                 access.bytes==game_reinitialized&&access.writes==writes&&model.abandoned_excursion_count()==1,
-                "player-less world exit did not safely inspect and abandon the reinitialized camera");
+                "the player-less load did not safely abandon the game-reset profile");
+            const auto reentered=model.step(access,frame(access,false,true,3,4));
+            require(reentered.transition==gdtpc::ProfileTransition::entered_third_person&&reentered.dirty&&
+                reentered.mode==gdtpc::ProfileMode::third_person,
+                "third-person intent did not survive a rift/world load");
+            static_cast<void>(model.step(access,frame(access,false,true,3,4)));
+            const auto returned=model.step(access,frame(access,true,true,3,4));
+            require(returned.transition==gdtpc::ProfileTransition::returned_native&&access.bytes==game_reinitialized,
+                "the auto-reentered generation did not restore its own native bytes exactly");
+        }
+
+        // A stop during the player-less part of a load cancels pending re-entry. A later valid
+        // generation stays native and receives no writes.
+        {
+            FakeAccess access; seed(access,native); gdtpc::ProfileSwitchModel model(third_profile, third_fov);
+            static_cast<void>(model.step(access,frame(access))); static_cast<void>(model.step(access,frame(access,true)));
+            seed(access,native);
+            const auto stopped=model.step(access,frame(access,false,true,2,0,true));
+            require(!stopped.control_enabled&&!stopped.dirty&&stopped.mode==gdtpc::ProfileMode::native,
+                "stop during a world load did not cancel the abandoned excursion");
+            const auto writes=access.writes;
+            const auto next=model.step(access,frame(access,false,true,3,4));
+            require(next.mode==gdtpc::ProfileMode::native&&!next.dirty&&access.writes==writes,
+                "a stopped runtime re-entered third person after the load");
         }
 
         // Scrolling changes only current/target blend; the invariant third-person profile remains

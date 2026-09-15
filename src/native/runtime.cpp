@@ -193,6 +193,7 @@ std::atomic<float> virtual_zoom_pull_status{0.0F};
 std::atomic<float> virtual_zoom_engine_status{0.0F};
 std::atomic<std::uint64_t> virtual_zoom_clicks{0};
 std::atomic<std::uint64_t> virtual_zoom_faults{0};
+std::atomic<std::uint64_t> camera_shake_suppressions{0};
 // Third-person far-plane cap: third_person_far_plane_percent of native WorldCamera+0x18 while mouse look applies;
 // restored exactly whenever it does not, and before the logical-stop acknowledgment.
 gdtpc::FarPlaneOverlay far_plane_overlay;
@@ -216,7 +217,9 @@ std::uintptr_t win_window_vtable{};
 std::uintptr_t dot_cursor_window{};
 gdtpc::CursorHandleOverlay dot_cursor_overlay;
 std::atomic<std::uint32_t> dot_cursor_status{0};
-// Panel flag bytes behind the menu rule: bit 0 inventory 0x95d2, 1 quest/NPC 0x991a, 2 skills 0x9f9a, 3 map 0xa2da, 4 Escape 0x17a9.
+// Panel flag bytes behind the menu rule: bit 0 inventory 0x95d2, 1 quest/NPC 0x991a, 2 skills 0x9f9a,
+// 3 map 0xa2da, 4 Escape confirmed by both 0x17a9 and 0x9c5a. The first Escape byte alone is also
+// latched by the rift button, so treating it as a panel drops mouse look after that and other Alt clicks.
 std::atomic<std::uint32_t> panel_open_flags_status{0xFFFFFFFFU};
 // Right-stick pitch. No stick source is wired: polling XInput in-process (build 20260913T214703813Z) saw no pad (the
 // controller reaches the game through Steam Input) and the game lost controller input for the rest of the session. The next
@@ -312,6 +315,7 @@ struct TelemetrySnapshot
     std::uint32_t virtual_zoom_state{}; // gdtpc::VirtualZoomState
     std::uint64_t virtual_zoom_clicks{};
     std::uint64_t virtual_zoom_faults{};
+    std::uint64_t camera_shake_suppressions{}; // active native shake branches suppressed while P > 0
     float far_plane{};                 // WorldCamera+0x18, the camera far-plane setting (SetCameraFarPlane)
     float render_far_plane{};          // WorldCamera+0xB0 = embedded Camera(+0x6C) far, used by GetFrustum(viewport)
     std::uint32_t far_plane_percent{}; // cap applied this frame, 0 when not applied
@@ -337,6 +341,8 @@ struct AccessPoint
 
 constexpr std::array<std::uint8_t, 8> get_camera_prefix{0x48, 0x8d, 0x81, 0xb0, 0x13, 0x00, 0x00, 0xc3};
 constexpr std::array<std::uint8_t, 15> update_from_input_prefix{0x40, 0x53, 0x48, 0x83, 0xec, 0x40, 0x48, 0x8b, 0xd9, 0xff, 0x15, 0xf9, 0x8c, 0x34, 0x00};
+constexpr std::array<std::uint8_t, 15> game_camera_update_prefix{0x48, 0x8b, 0xc4, 0x57, 0x48, 0x81, 0xec, 0xa0, 0x00, 0x00, 0x00, 0x0f, 0x29, 0x70, 0xe8};
+constexpr std::array<std::uint8_t, 16> game_camera_shake_prefix{0x48, 0x89, 0x5c, 0x24, 0x10, 0x48, 0x89, 0x6c, 0x24, 0x18, 0x57, 0x48, 0x81, 0xec, 0x70, 0x04};
 constexpr std::array<std::uint8_t, 8> get_camera_player_prefix{0x48, 0x8b, 0x81, 0x18, 0x01, 0x00, 0x00, 0xc3};
 constexpr std::array<std::uint8_t, 7> get_input_mode_prefix{0x8b, 0x81, 0x18, 0x77, 0x03, 0x00, 0xc3};
 constexpr std::uint8_t get_main_player_prefix[]{0x40, 0x53, 0x48, 0x83, 0xec, 0x20, 0x48, 0x8b, 0xd9, 0x48, 0x8b, 0x89, 0xe0, 0x40, 0x00, 0x00};
@@ -374,6 +380,8 @@ constexpr std::array<std::uint8_t, 32> engine_hash{0x9f, 0x20, 0x42, 0xe1, 0xfb,
 constexpr std::array game_access_points{
     AccessPoint{"?GetCamera@GameEngine@GAME@@QEAAPEAVGameCamera@2@XZ", get_camera_prefix.data(), get_camera_prefix.size(), 2904096},
     AccessPoint{"?UpdateFromInputImpl@GameCamera@GAME@@MEAAXXZ", update_from_input_prefix.data(), update_from_input_prefix.size(), 2797744},
+    AccessPoint{"?Update@GameCamera@GAME@@UEAAXXZ", game_camera_update_prefix.data(), game_camera_update_prefix.size(), 2802656},
+    AccessPoint{"?Shake@GameCamera@GAME@@QEAAXAEBVViewport@2@HMAEBVWorldVec3@2@_N@Z", game_camera_shake_prefix.data(), game_camera_shake_prefix.size(), 2798400},
     AccessPoint{"?GetPlayer@GameCamera@GAME@@QEAAPEAVPlayer@2@XZ", get_camera_player_prefix.data(), get_camera_player_prefix.size(), 2797680},
     AccessPoint{"?GetInputMode@GameEngine@GAME@@QEBA?AW4InputMode@2@XZ", get_input_mode_prefix.data(), get_input_mode_prefix.size(), 2988448},
     AccessPoint{"?GetMainPlayer@GameEngine@GAME@@QEBAPEAVPlayer@2@XZ", get_main_player_prefix, std::size(get_main_player_prefix), 2980496},
@@ -651,8 +659,26 @@ ObservedControlIdentity observe_control_identity(void* callback_camera) noexcept
     return observed;
 }
 
+bool guarded_read_mouse_input_mode(void* engine, std::uint32_t& mode) noexcept
+{
+    mode = 0xFFFFFFFFU;
+    if (engine == nullptr) return false;
+    __try
+    {
+        mode = *reinterpret_cast<const std::uint32_t*>(static_cast<const std::byte*>(engine) + 0x37718);
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) { mode = 0xFFFFFFFFU; return false; }
+}
+
 std::uint64_t update_control_generation(const ObservedControlIdentity& identity) noexcept
 {
+    // A loading frame with no validated player is absence of an identity, not a new identity. Rift
+    // travel can briefly produce exactly that shape while retaining the same camera/player objects;
+    // advancing here made the returning objects look like a replacement and permanently faulted a
+    // still-resident third-person profile. The first subsequent valid, different identity still
+    // advances the generation normally.
+    if (!identity.valid) return control_generation;
     const auto camera = reinterpret_cast<std::uintptr_t>(identity.camera);
     const auto engine = reinterpret_cast<std::uintptr_t>(identity.engine);
     const auto player = reinterpret_cast<std::uintptr_t>(identity.player);
@@ -1087,6 +1113,26 @@ bool guarded_write_eye_offset(void* camera, const gdtpc::CollisionVec3& value) n
     __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
 
+// GameCamera::Update calls WorldCamera::Update and then, when +0x138 is positive, overwrites
+// WorldCamera+0x60 with its generated shake vector. That final write replaces the virtual-zoom pull
+// after our UpdateFromInputImpl hook. Suppress only the pending native shake branch while a nonzero
+// pull is required; native mode and the no-pull end of virtual zoom remain untouched.
+bool guarded_suppress_pending_camera_shake(void* camera, bool& suppressed) noexcept
+{
+    suppressed = false;
+    if (camera == nullptr) return false;
+    __try
+    {
+        auto* const remaining = reinterpret_cast<std::int32_t*>(static_cast<std::byte*>(camera) + 0x138);
+        if (!gdtpc::camera_shake_active(*remaining)) return true;
+        *remaining = 0;
+        if (*remaining != 0) return false;
+        suppressed = true;
+        return true;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
+
 // The six profile fields GameCamera::UpdatePitch reads, as the engine currently holds them.
 bool guarded_read_pitch_profile(const void* camera, gdtpc::PitchProfileFields& profile) noexcept
 {
@@ -1171,7 +1217,8 @@ void release_far_plane(void* camera) noexcept
 }
 
 // After the virtual-zoom view: the cap is re-derived every callback from the native value (tolerant ownership) while
-// mouse look applies in third person, and released whenever it does not.
+// mouse look applies in third person, and released whenever it does not. At large virtual zooms it preserves the capped
+// sector's default-camera scenery depth beyond the target, rather than letting that depth collapse as the eye moves out.
 void run_far_plane_cap(void* camera) noexcept
 {
     const auto fraction = gdtpc::far_plane_fraction(active_config.third_person_far_plane_percent);
@@ -1180,9 +1227,10 @@ void run_far_plane_cap(void* camera) noexcept
         control_stop_requested.load(std::memory_order_acquire) == 0 &&
         camera_mode.load(std::memory_order_acquire) == static_cast<std::uint32_t>(gdtpc::ProfileMode::third_person);
     far_plane_percent_status.store(applies ? active_config.third_person_far_plane_percent : 0U, std::memory_order_relaxed);
+    const auto arm = virtual_zoom_frame_holding && virtual_zoom_arm_valid ? virtual_zoom_arm : 0.0F;
     auto current = 0.0F, value = 0.0F;
     if (!applies || fraction <= 0.0F || !guarded_read_float(camera, 0x18, current) ||
-        !far_plane_overlay.step(current, fraction, value))
+        !far_plane_overlay.step(current, fraction, arm, active_config.third_person_camera.distance.initial, value))
     {
         release_far_plane(camera);
         return;
@@ -1422,9 +1470,31 @@ void apply_virtual_zoom_view(void* camera) noexcept
     gdtpc::CollisionVec3 current{}, pull{}, value{};
     if (!guarded_read_float(camera, 0x08, engine) || !guarded_read_float(camera, 0x0c, yaw) ||
         !guarded_read_float(camera, 0x10, pitch) || !guarded_read_eye_offset(camera, current) ||
-        !gdtpc::eye_pull(engine, virtual_zoom_arm, yaw, pitch, pull) || !virtual_zoom_eye.step(current, pull, value))
+        !gdtpc::eye_pull(engine, virtual_zoom_arm, yaw, pitch, pull))
     {
         // A stale pull left in the field would misplace both the view and next frame's collision origin.
+        release_virtual_zoom_view(camera);
+        return;
+    }
+    bool shake_suppressed = false;
+    if (engine - virtual_zoom_arm > gdtpc::EyeOffsetOverlay::tolerance)
+    {
+        if (!guarded_suppress_pending_camera_shake(camera, shake_suppressed))
+        {
+            virtual_zoom_model->record_fault();
+            release_virtual_zoom_view(camera);
+            return;
+        }
+        if (shake_suppressed)
+        {
+            camera_shake_suppressions.fetch_add(1, std::memory_order_relaxed);
+            virtual_zoom_write_count.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    const auto eye_composed = shake_suppressed && virtual_zoom_eye.owned()
+        ? virtual_zoom_eye.recompose(pull, value) : virtual_zoom_eye.step(current, pull, value);
+    if (!eye_composed)
+    {
         release_virtual_zoom_view(camera);
         return;
     }
@@ -1771,6 +1841,7 @@ void capture_camera_state(void* camera_pointer, const gdtpc::CallbackEvidenceSna
     sample.virtual_zoom_state = virtual_zoom_state_status.load(std::memory_order_relaxed);
     sample.virtual_zoom_clicks = virtual_zoom_clicks.load(std::memory_order_relaxed);
     sample.virtual_zoom_faults = virtual_zoom_faults.load(std::memory_order_relaxed);
+    sample.camera_shake_suppressions = camera_shake_suppressions.load(std::memory_order_relaxed);
     sample.far_plane_percent = far_plane_percent_status.load(std::memory_order_relaxed);
     sample.npc_talk = npc_talk_status.load(std::memory_order_relaxed);
     sample.controller_state_rva = controller_state_rva_status.load(std::memory_order_relaxed);
@@ -1887,7 +1958,9 @@ void capture_camera_state(void* camera_pointer, const gdtpc::CallbackEvidenceSna
 // Panel-open rule from the structured 2026-09-13 session (IMPLEMENTATION_PLAN.md record "Structured panel
 // session"). Each qword is per panel and was consistent across two sessions:
 //   0x95d0 inventory/character (also vendor, stash)   0x9918 quest log / NPC dialog
-//   0x9f98 skills   0xa2d8 map   0xc110 vendor   0x17a8 Escape menu
+//   0x9f98 skills   0xa2d8 map   0xc110 vendor   0x17a8/0x9c58 Escape menu
+// The marked 2026-09-15 session added 0xafd8 Factions and 0x8b28 Loot Filter. As with the older
+// panel fields, the validated flag is byte +2 of each aligned qword.
 // NOT used: *(ui+0x1c20)+0x84 is cursor-over-panel, and 0x7378 fires in bursts during combat.
 // `readable` is false at the main menu and during loads, which mouse look treats as not eligible.
 void guarded_read_menu_signal(bool& menu, bool& readable, std::uint32_t& flags) noexcept
@@ -1906,14 +1979,10 @@ void guarded_read_menu_signal(bool& menu, bool& readable, std::uint32_t& flags) 
         // surrounding bytes can hold uninitialised padding (0x7f0000000000 after a UI rebuild; 0x3503-style masks from the
         // first frame of some launches), which stuck the old non-zero rule on "menu". Vendor 0xc110 was an integer, not a
         // flag, and vendors also raise the inventory flag, so it is not used.
-        flags = 0;
-        static constexpr std::uint32_t panel_flag_bytes[] = {0x95d2, 0x991a, 0x9f9a, 0xa2da, 0x17a9};
-        for (std::uint32_t bit = 0; bit < std::size(panel_flag_bytes); ++bit)
-            if (ui[panel_flag_bytes[bit]] == 1)
-            {
-                menu = true;
-                flags |= 1U << bit;
-            }
+        flags = gdtpc::classify_panel_open_flags(
+            ui[0x95d2], ui[0x991a], ui[0x9f9a], ui[0xa2da], ui[0x17a9], ui[0x9c5a],
+            ui[0xafda], ui[0x8b2a]);
+        menu = flags != 0;
         readable = true;
     }
     __except (EXCEPTION_EXECUTE_HANDLER) { menu = false; readable = false; flags = 0xFFFFFFFFU; }
@@ -2261,6 +2330,8 @@ void run_mouse_look(void* camera, const ObservedControlIdentity& before) noexcep
     bool menu_readable = false;
     std::uint32_t panel_flags = 0xFFFFFFFFU;
     guarded_read_menu_signal(input.menu_raw, menu_readable, panel_flags);
+    std::uint32_t input_mode = 0xFFFFFFFFU;
+    input.mouse_input_active = stable && guarded_read_mouse_input_mode(after.engine, input_mode) && input_mode == 0;
     panel_open_flags_status.store(panel_flags, std::memory_order_relaxed);
     // The NPC conversation window is not panel state; the player controller's talk state stands in for it.
     const auto third_person_stable = stable &&
@@ -2499,12 +2570,12 @@ bool write_ascii(const HANDLE file, const char* text, const std::size_t length) 
     return WriteFile(file, text, static_cast<DWORD>(length), &written, nullptr) != FALSE && written == length;
 }
 
-constexpr char telemetry_header[] = "sequence,tick_ms,callbacks,generation,sample_valid,camera,player,world_yaw,world_pitch,world_fov,requested_yaw,zoom_blend,zoom_target_blend,zoom_a,zoom_b,facing_valid,facing_x,facing_y,facing_z,facing_heading,game_engine,ui,dialog_active,action_set,input_mode,foreground,dropped,callback_thread_id,hook_entry,original_return,owner_thread_id,owner_thread_mismatches,camera_mode,restore_state,writes_enabled,control_writes,restore_writes,abandoned_excursions,collision_arm,collision_desired,collision_state,collision_queries,collision_hits,collision_faults,collision_writes,toggle_down,toggle_edges,profile_transition,collision_write_result,zoom_step_clicks,main_thread_id,window_thread_id,cam28_x,cam28_y,cam28_z,cam94_x,cam94_y,cam94_z,camera_offset_x,camera_offset_y,camera_offset_z,target_offset_x,target_offset_y,target_offset_z,shoulder_side,shoulder_edges,shoulder_writes,menu_flag,menu_ui9918,menu_e1858,mouse_look_state,aim_y,yaw_delta,cursor_warps,cursor_escapes,mouse_yaw_writes,combat_state,combat_aux,panel_candidates,pitch_offset,pitch_writes,visual_distance,visual_arm,eye_pull,engine_distance,virtual_zoom_state,virtual_zoom_clicks,virtual_zoom_faults,far_plane,render_far_plane,far_plane_percent,view_distance_locked,npc_talk,controller_state_rva,dot_cursor,panel_open_flags,right_stick_y,stick_pitch_delta\r\n";
+constexpr char telemetry_header[] = "sequence,tick_ms,callbacks,generation,sample_valid,camera,player,world_yaw,world_pitch,world_fov,requested_yaw,zoom_blend,zoom_target_blend,zoom_a,zoom_b,facing_valid,facing_x,facing_y,facing_z,facing_heading,game_engine,ui,dialog_active,action_set,input_mode,foreground,dropped,callback_thread_id,hook_entry,original_return,owner_thread_id,owner_thread_mismatches,camera_mode,restore_state,writes_enabled,control_writes,restore_writes,abandoned_excursions,collision_arm,collision_desired,collision_state,collision_queries,collision_hits,collision_faults,collision_writes,toggle_down,toggle_edges,profile_transition,collision_write_result,zoom_step_clicks,main_thread_id,window_thread_id,cam28_x,cam28_y,cam28_z,cam94_x,cam94_y,cam94_z,camera_offset_x,camera_offset_y,camera_offset_z,target_offset_x,target_offset_y,target_offset_z,shoulder_side,shoulder_edges,shoulder_writes,menu_flag,menu_ui9918,menu_e1858,mouse_look_state,aim_y,yaw_delta,cursor_warps,cursor_escapes,mouse_yaw_writes,combat_state,combat_aux,panel_candidates,pitch_offset,pitch_writes,visual_distance,visual_arm,eye_pull,engine_distance,virtual_zoom_state,virtual_zoom_clicks,virtual_zoom_faults,camera_shake_suppressions,far_plane,render_far_plane,far_plane_percent,view_distance_locked,npc_talk,controller_state_rva,dot_cursor,panel_open_flags,right_stick_y,stick_pitch_delta\r\n";
 
 int format_telemetry_row(const TelemetrySnapshot& sample, char* line, const std::size_t capacity) noexcept
 {
     return std::snprintf(line, capacity,
-        "%llu,%llu,%llu,%llu,%u,0x%llx,0x%llx,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%u,%.9g,%.9g,%.9g,%.9g,0x%llx,0x%llx,%u,%u,%u,%u,%llu,%u,%llu,%llu,%u,%llu,%u,%u,%u,%llu,%llu,%llu,%.9g,%.9g,%u,%llu,%llu,%llu,%llu,%u,%llu,%u,%u,%llu,%u,%u,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%u,%llu,%llu,%u,0x%llx,0x%llx,%u,%.9g,%.9g,%llu,%llu,%llu,%u,%u,0x%x,%.9g,%llu,%.9g,%.9g,%.9g,%.9g,%u,%llu,%llu,%.9g,%.9g,%u,%u,%u,0x%x,%u,0x%x,%d,%.9g\r\n",
+        "%llu,%llu,%llu,%llu,%u,0x%llx,0x%llx,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%u,%.9g,%.9g,%.9g,%.9g,0x%llx,0x%llx,%u,%u,%u,%u,%llu,%u,%llu,%llu,%u,%llu,%u,%u,%u,%llu,%llu,%llu,%.9g,%.9g,%u,%llu,%llu,%llu,%llu,%u,%llu,%u,%u,%llu,%u,%u,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%u,%llu,%llu,%u,0x%llx,0x%llx,%u,%.9g,%.9g,%llu,%llu,%llu,%u,%u,0x%x,%.9g,%llu,%.9g,%.9g,%.9g,%.9g,%u,%llu,%llu,%llu,%.9g,%.9g,%u,%u,%u,0x%x,%u,0x%x,%d,%.9g\r\n",
         static_cast<unsigned long long>(sample.sequence), static_cast<unsigned long long>(sample.tick_ms),
         static_cast<unsigned long long>(sample.callbacks), static_cast<unsigned long long>(sample.generation), sample.sample_valid,
         static_cast<unsigned long long>(sample.camera), static_cast<unsigned long long>(sample.player),
@@ -2546,6 +2617,7 @@ int format_telemetry_row(const TelemetrySnapshot& sample, char* line, const std:
         sample.pitch_offset, static_cast<unsigned long long>(sample.pitch_writes),
         sample.visual_distance, sample.visual_arm, sample.eye_pull, sample.engine_distance, sample.virtual_zoom_state,
         static_cast<unsigned long long>(sample.virtual_zoom_clicks), static_cast<unsigned long long>(sample.virtual_zoom_faults),
+        static_cast<unsigned long long>(sample.camera_shake_suppressions),
         sample.far_plane, sample.render_far_plane, sample.far_plane_percent, sample.view_distance_locked,
         sample.npc_talk, sample.controller_state_rva, sample.dot_cursor, sample.panel_open_flags,
         sample.right_stick_y, sample.stick_pitch_delta);
@@ -2755,6 +2827,7 @@ GDTPC_API GdTpcPhase __cdecl GdTpcInitializeLoggingV2(const wchar_t* log_path, c
         virtual_zoom_engine_status.store(0.0F, std::memory_order_relaxed);
         virtual_zoom_clicks.store(0, std::memory_order_relaxed);
         virtual_zoom_faults.store(0, std::memory_order_relaxed);
+        camera_shake_suppressions.store(0, std::memory_order_relaxed);
         far_plane_overlay = {};
         far_plane_percent_status.store(0, std::memory_order_relaxed);
 #endif

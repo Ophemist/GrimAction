@@ -19,6 +19,8 @@ ships in the zip as `README.md`.
 GrimAction works by loading a DLL into the running game (DLL injection). Antivirus programs may flag it as a false positive;
 see [docs/ANTIVIRUS.md](docs/ANTIVIRUS.md). Please don't disable your antivirus.
 
+Player-facing release history is in [CHANGELOG.md](CHANGELOG.md).
+
 Supported game build: Steam 24825149 (x64). When the game updates, GrimAction refuses to load until it's updated.
 
 ## Contributors

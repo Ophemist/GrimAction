@@ -101,8 +101,9 @@ every change.
 ### Far plane
 
 In third person the world camera's far plane (`WorldCamera+0x18`) is scaled to `third_person_far_plane_percent`. This gates
-distant scenery loading, which causes hitches when the camera looks toward the horizon. The runtime restores it when
-leaving third person.
+distant scenery loading, which causes hitches when the camera looks toward the horizon. While virtual zoom is holding,
+the result preserves the capped sector's default-camera scenery depth beyond the target as the rendered arm extends.
+The runtime restores the sector's native value when leaving third person.
 
 ## Telemetry
 

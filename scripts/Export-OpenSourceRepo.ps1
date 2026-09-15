@@ -17,6 +17,7 @@ if ($destinationFull.StartsWith([System.IO.Path]::GetFullPath($projectRoot) + [c
 # Source-relative path -> destination-relative path.
 $files = [ordered]@{
     'LICENSE' = 'LICENSE'
+    'CHANGELOG.md' = 'CHANGELOG.md'
     'THIRD-PARTY-NOTICES.txt' = 'THIRD-PARTY-NOTICES.txt'
     'Directory.Build.props' = 'Directory.Build.props'
     'docs\REPO_README.md' = 'README.md'

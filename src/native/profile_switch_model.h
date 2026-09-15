@@ -82,6 +82,11 @@ private:
     bool dirty_{};
     bool faulted_{};
     bool stop_latched_{};
+    // User intent is distinct from the profile currently resident in a particular camera
+    // generation. A world load can safely abandon a profile after the game has restored its own
+    // native bytes; keep the intent so the next valid generation re-enters third person without
+    // requiring another F8 press.
+    bool third_person_requested_{};
     ProfileMode mode_{ProfileMode::native};
     ProfileRestoreState restore_state_{ProfileRestoreState::clean};
     std::uint64_t control_write_count_{};

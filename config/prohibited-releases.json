@@ -51,6 +51,36 @@
       "recordedUtc": "2026-09-13",
       "reason": "Right-stick pitch via in-process XInput polling. Live: XInput never saw the pad (the controller reaches the game through Steam Input) and the game stopped receiving controller input from the first poll until the process exited (input mode never returned to 2). Player quit normally.",
       "supersededBy": "artifacts/releases/collision/20260913T224125656Z"
+    },
+    {
+      "runtimeSha256": "c96528e1b2772a87d47d5f1bcb3df9b306c5b6879ef20133bfc79f6fa8ed8d58",
+      "releases": [
+        "artifacts/releases/collision/20260915T133918680Z",
+        "artifacts/releases/collision/20260915T134011593Z"
+      ],
+      "recordedUtc": "2026-09-15",
+      "reason": "First high-zoom camera-shake fix failed live visual acceptance. EyeOffsetOverlay continuity logic ran inside UpdateFromInputImpl, but GameCamera::Update generates native shake afterward and overwrites WorldCamera+0x60 after the hook, still replacing the virtual-zoom pull and sending the camera away briefly. Controller-to-mouse behavior in the same runtime passed, but the runtime as a whole is rejected.",
+      "supersededBy": "artifacts/releases/collision/20260915T141516705Z"
+    },
+    {
+      "runtimeSha256": "7f2dbd63f5aff909b5836fa48cac77490981536656ea46e1390c60dca9268d64",
+      "releases": [
+        "artifacts/releases/collision/20260915T141516705Z",
+        "artifacts/releases/collision/20260915T141608184Z"
+      ],
+      "recordedUtc": "2026-09-15",
+      "reason": "Live test exposed a pre-existing extreme-zoom rendering failure: in a sector with native far plane 80, the configured 95 percent cap wrote 76 while the unobstructed virtual camera arm reached 85. The camera outran its own far plane and most of the world rendered black. Shake suppression executed, but visual shake acceptance was interrupted. Superseded by a far-plane safety floor tied to the rendered arm.",
+      "supersededBy": "artifacts/releases/collision/20260915T143934629Z"
+    },
+    {
+      "runtimeSha256": "c4e489c70ccd7576fe8ad355e126c21b8cb30edbc87879dab5bb2205a01e08c8",
+      "releases": [
+        "artifacts/releases/collision/20260915T143934629Z",
+        "artifacts/releases/collision/20260915T144031877Z"
+      ],
+      "recordedUtc": "2026-09-15",
+      "reason": "Camera-shake suppression passed live, but the first extreme-zoom clipping correction remained visually insufficient. A fixed 125 percent arm floor improved the view but left only 16.35 units of scenery beyond a 65.40-unit camera in the 80-unit Withering Fields sector, leaving a large black boundary even when looking down. Superseded by preserving the capped sector's full default-camera scenery depth as the arm extends.",
+      "supersededBy": "artifacts/releases/collision/20260915T181821598Z"
     }
   ]
 }

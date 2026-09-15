@@ -66,6 +66,9 @@ struct PitchProfileFields
 // -(engine_distance - arm) * eye_direction. False when anything is nonfinite or the pull is implausible.
 [[nodiscard]] bool eye_pull(float engine_distance, float arm, float yaw, float pitch, CollisionVec3& pull) noexcept;
 
+// GameCamera's native shake branch is active while its remaining-tick counter is positive.
+[[nodiscard]] bool camera_shake_active(std::int32_t remaining_ticks) noexcept;
+
 enum class VirtualZoomState : std::uint32_t
 {
     disabled = 0,   // not configured, or invalid settings
@@ -149,6 +152,9 @@ public:
     static constexpr float tolerance = 0.001F;
     // Value to write for the field's current value and this frame's pull. False when either is nonfinite.
     [[nodiscard]] bool step(const CollisionVec3& current, const CollisionVec3& pull, CollisionVec3& value) noexcept;
+    // Recompose from the last proven base without adopting the current field. Used only when the
+    // validated native shake branch is suppressed after it may already have replaced our last write.
+    [[nodiscard]] bool recompose(const CollisionVec3& pull, CollisionVec3& value) noexcept;
     // True, with the base to write, when the field still holds our pull. Ownership ends either way.
     [[nodiscard]] bool relinquish(const CollisionVec3& current, CollisionVec3& restore) noexcept;
     // The last write did not land: ownership is unknown, so claim nothing.
@@ -174,6 +180,9 @@ private:
 [[nodiscard]] bool valid_far_plane_percent(std::uint32_t percent) noexcept; // 50..100
 // Fraction to apply, or 0 when the percent is 100 (off) or invalid.
 [[nodiscard]] float far_plane_fraction(std::uint32_t percent) noexcept;
+// Keeps the same capped scenery depth beyond the target that the sector provides at the profile's default distance.
+// Returns zero when any input is not a usable camera distance.
+[[nodiscard]] float far_plane_floor(float capped_native, float visual_arm, float visual_default) noexcept;
 
 class FarPlaneOverlay final
 {
@@ -181,7 +190,7 @@ public:
     static constexpr float tolerance = 0.01F;
     // Value to write for the field's current value and a fraction in (0, 1]. False (write nothing) for a nonfinite
     // or implausible field or fraction.
-    [[nodiscard]] bool step(float current, float fraction, float& value) noexcept;
+    [[nodiscard]] bool step(float current, float fraction, float visual_arm, float visual_default, float& value) noexcept;
     // True, with the native value to write, when the field still holds our cap. Ownership ends either way.
     [[nodiscard]] bool relinquish(float current, float& restore) noexcept;
     void forget() noexcept { owned_ = false; }

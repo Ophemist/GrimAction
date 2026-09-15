@@ -307,6 +307,9 @@ int main()
             const gdtpc::CollisionVec3 perturbed{value.x + 0.0004F, value.y, value.z - 0.0004F};
             require(eye.step(perturbed, {0.0F, -9.0F, -71.0F}, value), "a recomposed pull refused");
             require(value == gdtpc::CollisionVec3{0.25F, -9.5F, -70.0F}, "a tolerant read-back compounded the pull");
+            require(eye.recompose({0.0F, -8.0F, -72.0F}, value), "a suppressed-shake recomposition refused");
+            require(eye.base() == base && value == gdtpc::CollisionVec3{0.25F, -8.5F, -71.0F},
+                "suppressed shake replaced the proven native base");
             // Something else wrote the field: that is the new base.
             const gdtpc::CollisionVec3 native{3.0F, 0.0F, 0.0F};
             require(eye.step(native, {0.0F, -1.0F, 0.0F}, value) && eye.base() == native, "a native change was not adopted");
@@ -318,10 +321,13 @@ int main()
             require(!eye.relinquish({9.0F, 9.0F, 9.0F}, restore), "release restored over a field that is no longer ours");
             require(eye.step(base, {1.0F, 0.0F, 0.0F}, value), "step refused");
             eye.forget();
+            require(!eye.recompose({0.0F, 0.0F, 0.0F}, value), "recomposition claimed an unowned field");
             require(eye.step(value, {0.0F, 0.0F, 0.0F}, value) && eye.base() == gdtpc::CollisionVec3{1.25F, -0.5F, 1.0F},
                 "after a failed write the field was still treated as ours");
             require(!eye.step({nan_value, 0.0F, 0.0F}, {0.0F, 0.0F, 0.0F}, value), "a NaN field was accepted");
             require(!eye.step(base, {0.0F, nan_value, 0.0F}, value), "a NaN pull was accepted");
+            require(!gdtpc::camera_shake_active(-1) && !gdtpc::camera_shake_active(0) && gdtpc::camera_shake_active(1),
+                "the native camera-shake remaining-tick gate is wrong");
         }
 
         // Pitch overlay explicit base: final = base + offset clamped to the floor, native() is the base, and
@@ -349,22 +355,37 @@ int main()
             near(gdtpc::far_plane_fraction(50), 0.5F, "50 percent is not a 0.5 cap");
             near(gdtpc::far_plane_fraction(100), 0.0F, "100 percent is not off");
             near(gdtpc::far_plane_fraction(20), 0.0F, "an invalid percent is not off");
+            near(gdtpc::far_plane_floor(76.0F, 65.4047394F, 42.0F), 99.4047394F,
+                "the observed view did not preserve its default-camera scenery depth");
+            near(gdtpc::far_plane_floor(76.0F, 85.0F, 42.0F), 119.0F,
+                "the maximum virtual arm did not preserve its default-camera scenery depth");
+            near(gdtpc::far_plane_floor(114.0F, 42.0F, 42.0F), 114.0F,
+                "the default visual distance changed a sufficient native cap");
+            near(gdtpc::far_plane_floor(30.0F, 42.0F, 42.0F), 42.0F,
+                "a short sector cap was made worse than the target distance");
+            near(gdtpc::far_plane_floor(76.0F, nan_value, 42.0F), 0.0F,
+                "a nonfinite arm produced a far-plane floor");
             gdtpc::FarPlaneOverlay far;
             auto value = 0.0F, restore = 0.0F;
-            require(far.step(400.0F, 0.5F, value), "a valid far plane was refused");
+            require(far.step(400.0F, 0.5F, 0.0F, 42.0F, value), "a valid far plane was refused");
             near(value, 200.0F, "the cap is not half of the native far plane");
-            require(far.step(200.004F, 0.7F, value), "a recomposed cap was refused");
+            require(far.step(200.004F, 0.7F, 0.0F, 42.0F, value), "a recomposed cap was refused");
             near(value, 280.0F, "a mode change compounded instead of recomposing from native");
-            require(far.step(600.0F, 0.7F, value) && far.native() == 600.0F, "a sector's new far plane was not adopted");
+            require(far.step(600.0F, 0.7F, 0.0F, 42.0F, value) && far.native() == 600.0F, "a sector's new far plane was not adopted");
             near(value, 420.0F, "the adopted far plane was not capped");
             require(far.relinquish(420.0F, restore) && restore == 600.0F && !far.owned(), "release did not restore native");
-            require(far.step(600.0F, 0.5F, value), "step after release refused");
+            require(far.step(80.0F, 0.95F, 85.0F, 42.0F, value), "the live clipping regression was refused");
+            near(value, 119.0F, "an 85-unit camera lost the sector's default-camera scenery depth");
+            require(far.relinquish(119.0F, restore) && restore == 80.0F, "the floored cap did not restore the short sector native");
+            require(far.step(600.0F, 0.5F, 0.0F, 42.0F, value), "step after release refused");
             require(!far.relinquish(123.0F, restore), "release restored over a foreign far plane");
-            require(far.step(600.0F, 0.5F, value), "step refused");
+            require(far.step(600.0F, 0.5F, 0.0F, 42.0F, value), "step refused");
             far.forget();
-            require(far.step(300.0F, 0.5F, value) && far.native() == 300.0F, "after a failed write the field was still ours");
-            require(!far.step(nan_value, 0.5F, value) && !far.step(-1.0F, 0.5F, value) && !far.step(400.0F, 0.0F, value) &&
-                !far.step(400.0F, 1.5F, value), "an implausible far plane or fraction was accepted");
+            require(far.step(300.0F, 0.5F, 0.0F, 42.0F, value) && far.native() == 300.0F, "after a failed write the field was still ours");
+            require(!far.step(nan_value, 0.5F, 0.0F, 42.0F, value) && !far.step(-1.0F, 0.5F, 0.0F, 42.0F, value) &&
+                !far.step(400.0F, 0.0F, 0.0F, 42.0F, value) && !far.step(400.0F, 1.5F, 0.0F, 42.0F, value) &&
+                !far.step(400.0F, 0.5F, -1.0F, 42.0F, value) && !far.step(400.0F, 0.5F, 85.0F, 0.0F, value),
+                "an implausible far plane, fraction, arm or default was accepted");
         }
 
         // Collision tests the VISUAL distance: the ray length is V, the arm never exceeds it, and a hit
@@ -388,7 +409,7 @@ int main()
                      "read-back, click detection (single, clipped, multiple, foreign) into bounded proportional V "
                      "with the target put back to E, V remembered across F8 and reset per session, one-shot release "
                      "on ineligibility, refusal of an unclickable hold, fault reacquire and latch hand-back, glide "
-                     "smoothing, tolerant eye-offset ownership with exact release, explicit-base pitch overlay, "
+                     "smoothing, tolerant eye-offset ownership, suppressed-shake recomposition from the proven base, exact release, native camera-shake activity classification, explicit-base pitch overlay, "
                      "far-plane cap percent, ownership and restore, and collision on the visual distance.\n";
         return 0;
     }

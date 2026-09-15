@@ -82,6 +82,11 @@ bool gdtpc::eye_pull(const float engine_distance, const float arm, const float y
     return true;
 }
 
+bool gdtpc::camera_shake_active(const std::int32_t remaining_ticks) noexcept
+{
+    return remaining_ticks > 0;
+}
+
 gdtpc::VirtualZoomModel::VirtualZoomModel(const VirtualZoomSettings settings) noexcept
     : settings_{settings}, valid_{settings.enabled && valid_virtual_zoom_settings(settings)}
 {
@@ -263,6 +268,17 @@ bool gdtpc::EyeOffsetOverlay::step(const CollisionVec3& current, const Collision
     return true;
 }
 
+bool gdtpc::EyeOffsetOverlay::recompose(const CollisionVec3& pull, CollisionVec3& value) noexcept
+{
+    if (!owned_ || !finite_vec(pull)) return false;
+    const CollisionVec3 next{base_.x + pull.x, base_.y + pull.y, base_.z + pull.z};
+    if (!finite_vec(next)) return false;
+    written_ = next;
+    pull_ = pull;
+    value = next;
+    return true;
+}
+
 bool gdtpc::EyeOffsetOverlay::relinquish(const CollisionVec3& current, CollisionVec3& restore) noexcept
 {
     const auto restorable = finite_vec(current) && ours(current);
@@ -283,15 +299,31 @@ float gdtpc::far_plane_fraction(const std::uint32_t percent) noexcept
     return static_cast<float>(percent) / 100.0F;
 }
 
-bool gdtpc::FarPlaneOverlay::step(const float current, const float fraction, float& value) noexcept
+float gdtpc::far_plane_floor(const float capped_native, const float visual_arm, const float visual_default) noexcept
+{
+    if (!std::isfinite(capped_native) || capped_native <= 0.0F || capped_native > 1.0e6F ||
+        !std::isfinite(visual_arm) || visual_arm <= 0.0F || visual_arm > 200.0F ||
+        !std::isfinite(visual_default) || visual_default <= 0.0F || visual_default > 200.0F)
+        return 0.0F;
+    // At the default arm, capped_native - visual_default is the sector's visible depth beyond the
+    // target. Preserve that depth as virtual zoom moves the eye farther away instead of shrinking it
+    // to a percentage of the arm. If the sector already clips before the default target, do not make
+    // the result worse: the capped native value remains the floor.
+    return std::max(capped_native, visual_arm + std::max(0.0F, capped_native - visual_default));
+}
+
+bool gdtpc::FarPlaneOverlay::step(const float current, const float fraction, const float visual_arm,
+    const float visual_default, float& value) noexcept
 {
     // A far plane is a positive distance; anything else is not a camera we understand.
     if (!std::isfinite(current) || current <= 0.0F || current > 1.0e6F || !std::isfinite(fraction) ||
-        fraction <= 0.0F || fraction > 1.0F)
+        fraction <= 0.0F || fraction > 1.0F || !std::isfinite(visual_arm) || visual_arm < 0.0F || visual_arm > 200.0F ||
+        !std::isfinite(visual_default) || visual_default <= 0.0F || visual_default > 200.0F)
         return false;
     const auto ours = owned_ && std::abs(current - written_) <= tolerance;
     if (!ours) native_ = current;
-    const auto next = native_ * fraction;
+    const auto capped_native = native_ * fraction;
+    const auto next = visual_arm > 0.0F ? far_plane_floor(capped_native, visual_arm, visual_default) : capped_native;
     if (!std::isfinite(next) || next <= 0.0F) return false;
     written_ = next;
     owned_ = true;
@@ -306,4 +338,3 @@ bool gdtpc::FarPlaneOverlay::relinquish(const float current, float& restore) noe
     owned_ = false;
     return restorable;
 }
-

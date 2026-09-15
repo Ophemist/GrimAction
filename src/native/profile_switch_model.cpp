@@ -126,11 +126,40 @@ gdtpc::ProfileSwitchModel::AppliedProfilePresence gdtpc::ProfileSwitchModel::app
 gdtpc::ProfileStepResult gdtpc::ProfileSwitchModel::step(
     CameraMemoryAccess& access, const ProfileFrame& frame) noexcept
 {
-    if (frame.stop_requested) stop_latched_ = true;
+    if (frame.stop_requested)
+    {
+        stop_latched_ = true;
+        third_person_requested_ = false;
+    }
 
     const auto identity_valid = frame.session.valid() && frame.camera != nullptr &&
         reinterpret_cast<std::uintptr_t>(frame.camera) == frame.session.camera;
-    if (session_.valid() && (!identity_valid || frame.session != session_))
+    if (session_.valid() && !identity_valid && dirty_ && !stop_latched_)
+    {
+        // During a load, a confirmed callback camera can remain usable while the player is briefly
+        // absent. If the game has already restored every invariant native byte, the old excursion is
+        // safely gone. If our full profile remains, retain ownership but perform no writes until the
+        // same validated session returns. An indeterminate read is likewise deferred; it is not
+        // permission to write or reason to permanently fault a transient load.
+        const auto presence = applied_profile_presence(access, frame.camera);
+        if (presence == AppliedProfilePresence::absent)
+        {
+            clear_session_memories();
+            ++abandoned_excursion_count_;
+            dirty_ = false;
+            restore_state_ = ProfileRestoreState::abandoned;
+            session_ = {};
+            mode_ = ProfileMode::native;
+            return result(ProfileTransition::returned_native, CameraTransactionResult::success);
+        }
+    }
+    // Loading can temporarily remove the player while leaving the same camera and its profile in
+    // place. That is ineligibility, not proof of a replacement: keep the old session bound and make
+    // no writes until a valid identity returns. A stop is the exception because it must settle the
+    // old excursion before acknowledging shutdown.
+    const auto session_replaced = session_.valid() && identity_valid && frame.session != session_;
+    const auto lost_during_stop = session_.valid() && !identity_valid && stop_latched_;
+    if (session_replaced || lost_during_stop)
     {
         key_armed_ = false;
         if (dirty_)
@@ -139,8 +168,10 @@ gdtpc::ProfileStepResult gdtpc::ProfileSwitchModel::step(
             // address, so restoring is not an option here. The only question is whether anything of
             // ours survives. If the camera no longer holds the profile we wrote, the game has
             // already reinitialized it and the excursion is simply over: record it as abandoned and
-            // rebind cleanly so the toggle keeps working. If our profile is still resident, a live
-            // object really is modified, and latching the fault remains the honest, safe answer.
+            // rebind cleanly. The user's third-person intent survives that safe abandonment so a rift
+            // or other world load can apply a fresh profile to the next generation. If our profile is
+            // still resident, a live object really is modified, and latching the fault remains the
+            // honest, safe answer.
             const auto presence = applied_profile_presence(access, frame.camera);
             clear_session_memories();
             if (presence != AppliedProfilePresence::absent)
@@ -184,15 +215,21 @@ gdtpc::ProfileStepResult gdtpc::ProfileSwitchModel::step(
     }
     if (faulted_) return result(ProfileTransition::rejected_fault, CameraTransactionResult::restore_failed);
 
-    if (!frame.toggle_down)
-    {
-        key_armed_ = true;
-        return result(ProfileTransition::none, CameraTransactionResult::success);
-    }
-    if (!key_armed_) return result(ProfileTransition::none, CameraTransactionResult::success);
-    key_armed_ = false;
+    if (!frame.toggle_down) key_armed_ = true;
+    const auto toggle_edge = frame.toggle_down && key_armed_;
+    if (toggle_edge) key_armed_ = false;
 
-    if (mode_ == ProfileMode::third_person) return restore(access, frame);
+    if (mode_ == ProfileMode::third_person)
+    {
+        if (!toggle_edge) return result(ProfileTransition::none, CameraTransactionResult::success);
+        third_person_requested_ = false;
+        return restore(access, frame);
+    }
+    if (toggle_edge) third_person_requested_ = true;
+    // After a safe session abandonment, re-enter on the first stable, foreground frame. This still
+    // captures the new generation's exact native preimage before writing and never writes through
+    // an invalid identity, in the background, after stop, or after a fault.
+    if (!third_person_requested_) return result(ProfileTransition::none, CameraTransactionResult::success);
 
     CameraRawSnapshot desired{};
     const auto entry_zoom = has_third_person_zoom_ ? third_person_zoom_ : third_person_profile_.distance.initial;
@@ -207,6 +244,7 @@ gdtpc::ProfileStepResult gdtpc::ProfileSwitchModel::step(
     account_control(journal);
     if (transaction == CameraTransactionResult::success)
     {
+        third_person_requested_ = true;
         native_snapshot_ = native;
         applied_snapshot_ = desired;
         has_native_snapshot_ = true;

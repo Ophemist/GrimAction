@@ -1,9 +1,21 @@
 [CmdletBinding()]
 param(
+    # ---- Dot settings: edit these defaults, save, and run Dot Cursor.cmd again (close Grim Dawn first). ----
+    # Dot radius in pixels on the normal 32 px cursor. The large UI cursor (64 px) is drawn at twice this.
+    # Quarter allows 2 to 32; Round allows 2 to 16.
+    [ValidateRange(2, 32)][double]$DotRadius = 12,
+    # Width of the dark outline in pixels on the normal cursor (doubled on the large cursor). 0 for no outline.
+    [ValidateRange(0, 8)][double]$OutlineWidth = 1.5,
+    # Outline darkness, 0 (invisible) to 255 (solid black).
+    [ValidateRange(0, 255)][int]$OutlineOpacity = 220,
+    # Quarter: the dot's centre is exactly the click point; the game can only draw the lower-right quarter of it.
+    # Round: a full circle, but it sits below and to the right of the click point.
+    [ValidateSet('Quarter', 'Round')][string]$Shape = 'Quarter',
+    # ---- End of dot settings. ----
+
     # Grim Dawn install folder (contains resources\UI.arc). Detected from Steam when omitted.
     [string]$GameRoot,
-    # Dot: a small white dot with a dark edge at the cursor's click point (top-left pixel). Blank: fully transparent, for use
-    # with the ReShade ThirdPersonDot effect.
+    # Dot: the dot described above. Blank: fully transparent, for use with the ReShade ThirdPersonDot effect.
     [ValidateSet('Dot', 'Blank')][string]$Style = 'Dot',
     # Put the original hand cursor back from the backup this script made.
     [switch]$Restore,
@@ -11,9 +23,9 @@ param(
     [string]$ArchivePath
 )
 
-# Optional extra, applied by the player: makes Grim Dawn's default hand cursor (cursor/cursordefault.tex and its _lg
-# version) fully transparent, so the ReShade aim dot (extras\reshade\ThirdPersonDot.fx, kept on all the time) is the only
-# pointer. The attack sword, dialog bubble, merchant bag and controller reticles are unchanged.
+# Optional extra, applied by the player: replaces Grim Dawn's default hand cursor (cursor/cursordefault.tex and its _lg
+# version) with a white dot, or makes it fully transparent so the ReShade aim dot (extras\reshade\ThirdPersonDot.fx) is the
+# only pointer. The attack sword, dialog bubble, merchant bag and controller reticles are unchanged.
 #
 # This edits resources\UI.arc in the game folder. It keeps a backup next to this script, and -Restore puts it back. Steam's
 # "Verify integrity of game files" also restores the original. Game updates may undo it; run it again afterwards.
@@ -83,27 +95,56 @@ try {
         $width = [BitConverter]::ToUInt32($bytes, 12 + 16); $height = [BitConverter]::ToUInt32($bytes, 12 + 12)
         $bits = [BitConverter]::ToUInt32($bytes, 12 + 88)
         if ($bits -ne 32 -or $bytes.Length -ne 140 + $width * $height * 4) { throw "Unexpected texture layout in $name; nothing was changed." }
-        # Pixels are BGRA rows from the top. The engine places the texture's top-left pixel on the mouse position, so the
-        # dot sits there: white core, dark edge on its right and bottom (the corner clips the other two sides).
-        $core = [int][Math]::Max(1, $width / 16); $edge = [int][Math]::Max(1, $width / 32)
+        # Pixels are BGRA rows from the top. The engine places the texture's top-left pixel on the mouse position, so a
+        # Quarter dot is centred on that corner and a Round dot is tucked into it.
+        $scale = $width / 32.0
+        $outerRadius = $DotRadius * $scale; $outline = $OutlineWidth * $scale
+        $center = if ($Shape -eq 'Round') { $outerRadius } else { 0.0 }
+        if ($Style -eq 'Dot' -and $center + $outerRadius -gt [Math]::Min($width, $height)) {
+            throw "DotRadius $DotRadius is too large for the $Shape shape (max $(if ($Shape -eq 'Round') { 16 } else { 32 })); nothing was changed."
+        }
         $pixels = New-Object byte[] ($width * $height * 4)
         if ($Style -eq 'Dot') {
-            for ($y = 0; $y -lt $core + $edge; $y++) {
-                for ($x = 0; $x -lt $core + $edge; $x++) {
+            # 4x4 supersampling per pixel smooths the edges. The outline runs round the whole visible shape, including the
+            # two straight edges of a Quarter dot, so it stays visible on bright ground.
+            $extent = [int][Math]::Ceiling($center + $outerRadius)
+            for ($y = 0; $y -lt $extent; $y++) {
+                for ($x = 0; $x -lt $extent; $x++) {
+                    $inCore = 0; $inOuter = 0
+                    for ($sy = 0; $sy -lt 4; $sy++) {
+                        for ($sx = 0; $sx -lt 4; $sx++) {
+                            $px = $x + ($sx + 0.5) / 4; $py = $y + ($sy + 0.5) / 4
+                            $distance = [Math]::Sqrt(($px - $center) * ($px - $center) + ($py - $center) * ($py - $center))
+                            if ($distance -gt $outerRadius) { continue }
+                            $inOuter++
+                            $insideEdges = $Shape -eq 'Round' -or ($px -ge $outline -and $py -ge $outline)
+                            if ($distance -le $outerRadius - $outline -and $insideEdges) { $inCore++ }
+                        }
+                    }
+                    if ($inOuter -eq 0) { continue }
                     $o = ($y * $width + $x) * 4
-                    $value = if ($x -lt $core -and $y -lt $core) { 255 } else { 0 }
-                    $pixels[$o] = $value; $pixels[$o + 1] = $value; $pixels[$o + 2] = $value; $pixels[$o + 3] = if ($value -eq 255) { 255 } else { 200 }
+                    $value = [byte][Math]::Round(255.0 * $inCore / $inOuter)
+                    $pixels[$o] = $value; $pixels[$o + 1] = $value; $pixels[$o + 2] = $value
+                    $pixels[$o + 3] = [byte][Math]::Round(($inCore * 255.0 + ($inOuter - $inCore) * $OutlineOpacity) / 16)
                 }
             }
         }
-        # A texture this script wrote (either style) has nothing outside the dot's corner square; the game's hand does.
-        for ($y = 0; $y -lt $height; $y++) {
+        # Textures this script writes carry an invisible marker in the bottom-right pixel (alpha 0), so any dot size or shape
+        # is recognized as already edited. Older versions of this script wrote no marker but kept everything inside a
+        # 9/32-width corner square; the game's hand draws outside it.
+        $markerOffset = 140 + ($width * $height - 1) * 4
+        $marker = [byte[]](0x47, 0x44, 0x43, 0)
+        $hasMarker = $bytes[$markerOffset] -eq $marker[0] -and $bytes[$markerOffset + 1] -eq $marker[1] -and
+            $bytes[$markerOffset + 2] -eq $marker[2] -and $bytes[$markerOffset + 3] -eq 0
+        $legacySize = [int](9 * $scale)
+        for ($y = 0; $y -lt $height -and -not $hasMarker; $y++) {
             for ($x = 0; $x -lt $width; $x++) {
-                if ($x -lt $core + $edge -and $y -lt $core + $edge) { continue }
+                if ($x -lt $legacySize -and $y -lt $legacySize) { continue }
                 if ($bytes[140 + ($y * $width + $x) * 4 + 3] -ne 0) { $originalCursor = $true; break }
             }
             if ($originalCursor) { break }
         }
+        for ($i = 0; $i -lt 4; $i++) { $pixels[$pixels.Length - 4 + $i] = $marker[$i] }
         for ($i = 0; $i -lt $pixels.Length; $i++) { if ($bytes[140 + $i] -ne $pixels[$i]) { $changed = $true; $bytes[140 + $i] = $pixels[$i] } }
         [System.IO.File]::WriteAllBytes((Join-Path $blank "cursor\$name"), $bytes)
     }

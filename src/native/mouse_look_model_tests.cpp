@@ -32,6 +32,7 @@ gdtpc::MouseLookInput frame(const std::int32_t x, const std::int32_t y)
 {
     gdtpc::MouseLookInput in{};
     in.eligible = true;
+    in.mouse_input_active = true;
     in.cursor_valid = true;
     in.cursor_x = x;
     in.cursor_y = y;
@@ -144,6 +145,30 @@ int main()
             require(d.state == gdtpc::MouseLookState::captured, "debounce did not advance while Alt was held");
         }
 
+        // UI panel bytes: ordinary panels are independent, while Escape needs its companion byte.
+        // A lone primary Escape byte is the live rift/Alt-click regression and must not hold mouse look.
+        {
+            require(gdtpc::classify_panel_open_flags(0, 0, 0, 0, 0, 0, 0, 0) == 0, "closed UI reported a panel");
+            require(gdtpc::classify_panel_open_flags(1, 0, 0, 0, 0, 0, 0, 0) == 0x01, "inventory flag was missed");
+            require(gdtpc::classify_panel_open_flags(0, 1, 0, 0, 0, 0, 0, 0) == 0x02, "quest flag was missed");
+            require(gdtpc::classify_panel_open_flags(0, 0, 1, 0, 0, 0, 0, 0) == 0x04, "skills flag was missed");
+            require(gdtpc::classify_panel_open_flags(0, 0, 0, 1, 0, 0, 0, 0) == 0x08, "map flag was missed");
+            require(gdtpc::classify_panel_open_flags(0, 0, 0, 0, 1, 0, 0, 0) == 0,
+                "a lone rift/Alt-click latch was mistaken for Escape");
+            require(gdtpc::classify_panel_open_flags(0, 0, 0, 0, 0, 1, 0, 0) == 0,
+                "a lone Escape companion byte reported a panel");
+            require(gdtpc::classify_panel_open_flags(0, 0, 0, 0, 1, 1, 0, 0) == 0x10,
+                "paired Escape flags were missed");
+            require(gdtpc::classify_panel_open_flags(0, 0, 0, 0, 0, 0, 1, 0) == 0x20,
+                "Factions flag was missed");
+            require(gdtpc::classify_panel_open_flags(0, 0, 0, 0, 0, 0, 0, 1) == 0x40,
+                "Loot Filter flag was missed");
+            require(gdtpc::classify_panel_open_flags(2, 0x7f, 0xff, 2, 1, 1, 2, 0xff) == 0x10,
+                "non-flag padding values reported ordinary panels");
+            require(gdtpc::classify_panel_open_flags(1, 1, 1, 1, 1, 1, 1, 1) == 0x7f,
+                "combined panel flags were classified incorrectly");
+        }
+
         // Ineligibility wins over everything, and bad windows or cursor reads never produce rotation.
         {
             gdtpc::MouseLookModel model(enabled_settings());
@@ -172,6 +197,25 @@ int main()
             d = model.step(moved);
             require(d.reanchor && d.warp_x == 700, "a moved window did not re-anchor to its new centre");
             near(d.yaw_delta, 0.0F, "a moved window rotated the camera");
+        }
+
+        // Controller mode releases the OS cursor. Returning to the game's mouse mode captures through
+        // a re-anchor, discarding any cursor displacement made while the controller was active.
+        {
+            gdtpc::MouseLookModel model(enabled_settings());
+            static_cast<void>(model.step(frame(600, 450)));
+            static_cast<void>(model.step(frame(700, 450)));
+            auto controller = frame(975, 725);
+            controller.mouse_input_active = false;
+            auto d = model.step(controller);
+            require(d.state == gdtpc::MouseLookState::ineligible && d.release_edge && !d.captured && !d.warp,
+                "controller mode did not release mouse capture");
+            d = model.step(controller);
+            require(!d.release_edge && !d.warp, "controller mode repeated its release edge or warped the cursor");
+            d = model.step(frame(975, 725));
+            require(d.state == gdtpc::MouseLookState::captured && d.capture_edge && d.reanchor && d.warp,
+                "returning to mouse mode did not recapture through a re-anchor");
+            near(d.yaw_delta, 0.0F, "cursor movement made in controller mode rotated the camera on return");
         }
 
         // Inversion flips only the horizontal sign; reset forgets capture and restores aim_start.
@@ -392,11 +436,12 @@ int main()
             near(model.step(in).pitch_offset_degrees, -16.0F, "the stick moved pitch while Alt freed the cursor");
         }
 
-        std::cout << "PASS: right-stick pitch, dot cursor handle ownership, NPC conversation classification, vertical look pitch-then-aim spill with reversal, pitch held through Alt and menus, catch-up and pitch clamps, mouse-look settings validation, disabled and invalid configurations, capture-edge "
+        std::cout << "PASS: panel flag classification with paired Escape confirmation and lone Alt-click rejection, right-stick pitch, dot cursor handle ownership, NPC conversation classification, vertical look pitch-then-aim spill with reversal, pitch held through Alt and menus, catch-up and pitch clamps, mouse-look settings validation, disabled and invalid configurations, capture-edge "
                      "re-anchor, pixel-to-yaw conversion, aim-band slide and clamping, Left Alt hard override in "
                      "combat and menus, re-anchor after every release, debounced menu release with the single-frame "
                      "gap, combat holding capture through a menu, debounce progress while Alt is held, "
-                     "ineligibility, minimised windows, failed cursor reads, moved windows, inversion and reset.\n";
+                     "ineligibility, controller-mode release and zero-delta mouse-mode recapture, minimised windows, "
+                     "failed cursor reads, moved windows, inversion and reset.\n";
         return 0;
     }
     catch (const std::exception& error)

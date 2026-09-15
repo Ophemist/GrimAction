@@ -12,7 +12,7 @@ gone when you quit the game.
 - Grim Dawn on Steam, **64-bit**, at the game version this release supports (see "Supported game version" below).
 - Windows 10 or 11, 64-bit.
 - Nothing else. The download includes everything it needs (no .NET install).
-- Optional: the dot cursor (below) replaces the game's hand cursor with a small dot.
+- Optional: the dot cursor (below) replaces the game's hand cursor with an adjustable dot.
 
 ## Install
 
@@ -88,7 +88,7 @@ The settings most people will want:
 | `shoulder_height_units` | 1.5 | 0 to 10 | How high the camera looks over the character |
 | `distance_default` | 42 | between `distance_min` and `distance_max` | Starting zoom |
 | `fov_degrees` | 45 | 30 to 60 | Field of view in third person |
-| `third_person_far_plane_percent` | 95 | 50 to 100 | View distance. Lower reduces hitches and cuts off the horizon sooner. |
+| `third_person_far_plane_percent` | 95 | 50 to 100 | View distance. Lower reduces hitches and cuts off the horizon sooner; extreme zoom keeps a safety floor so the camera cannot outrun the rendered world. |
 | `npc_dialog_releases_cursor` | true | true / false | Free the cursor while talking to NPCs |
 | `menu_release_frames` | 3 | 1 to 60 | Frames a menu must stay closed before mouse look returns |
 
@@ -100,8 +100,10 @@ reserved for features that don't work yet; leave them `false`.
 ## Dot cursor (optional)
 
 GrimAction itself can't hide the game's cursor. Grim Dawn draws it from a texture, and the dot cursor extra swaps that
-texture's hand for a small white dot at the exact spot you click. The game uses the same hand in menus, so the dot is your
-pointer everywhere. The attack sword, NPC dialog bubble and merchant bag cursors are unchanged.
+texture's hand for an outlined white dot centred on the exact spot you click. The game can only draw the cursor image
+below and to the right of the click point, so you see the lower-right quarter of the dot, with its corner on the click point.
+The game uses the same hand in menus, so the dot is your pointer everywhere. The attack sword, NPC dialog bubble and
+merchant bag cursors are unchanged.
 
 1. Close Grim Dawn.
 2. Double-click `extras\dot-cursor\Dot Cursor.cmd`.
@@ -109,13 +111,17 @@ pointer everywhere. The attack sword, NPC dialog bubble and merchant bag cursors
 To undo, double-click `Restore Hand Cursor.cmd`, or use Steam: Grim Dawn > Properties > Installed Files > Verify integrity
 of game files.
 
+To change the dot, open `Set-HiddenHandCursor.ps1` in Notepad. The settings are at the top: `DotRadius` (size),
+`OutlineWidth`, `OutlineOpacity`, and `Shape` (`Quarter`, exactly on the click point, or `Round`, a full circle that sits
+slightly below and to the right of it). Save, close Grim Dawn, and run `Dot Cursor.cmd` again.
+
 Unlike the rest of GrimAction, this **edits a game file**: `resources\UI.arc`. It uses the game's own ArchiveTool, changes
 only the two hand-cursor images, checks the result, and keeps a backup of the original in `extras\dot-cursor\backup`. A
 Grim Dawn update or a Steam file check may put the hand back; run it again afterwards. The download contains no game art:
 the dot is drawn into your own copy of the texture.
 
-The texture dot is small. If you use ReShade, the effect `extras\reshade\ThirdPersonDot.fx` draws a larger dot at the mouse
-underneath it, which together reads as a colored ring with a white center. Copy it into your ReShade shaders folder (usually
+The texture dot works on its own. If you use ReShade, the effect `extras\reshade\ThirdPersonDot.fx` can instead draw a
+fully round dot at the mouse (run the texture dot or the ReShade dot, not both, or you'll see two). Copy it into your ReShade shaders folder (usually
 `Grim Dawn\x64\reshade-shaders\Shaders`), open the ReShade overlay (Home), enable **ThirdPersonDot**, and set its size and
 color to taste. Keep it on all the time. If you'd rather have only the ReShade dot, run `Set-HiddenHandCursor.ps1 -Style
 Blank` to remove the hand entirely.
@@ -156,6 +162,10 @@ antivirus exclusion, remove it.
 | Does not match this release | A file was damaged or changed (often by antivirus). Extract the zip again. |
 | Windows did not allow access | Run the game and GrimAction the same way: both normally, or both as administrator. |
 | Mouse look stopped working after changing graphics options | Quit the game, relaunch, and start GrimAction again. |
+
+At the furthest zoom, looking almost horizontally can expose black above or beyond the level. Grim Dawn's isometric maps
+do not include a complete sky or distant backdrop for that viewpoint. Zoom in slightly or look downward; normal play is
+unaffected.
 
 ## Logs
 

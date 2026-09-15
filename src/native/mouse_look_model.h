@@ -36,6 +36,15 @@ struct MouseLookSettings
 
 [[nodiscard]] bool valid_mouse_look_settings(const MouseLookSettings& settings) noexcept;
 
+// Converts the validated UI flag bytes into the telemetry/menu bitmask used by the runtime.
+// Inventory, quest, skills, map, Factions and Loot Filter each have a single dedicated byte. Escape is deliberately
+// confirmed by two bytes: ui+0x17a9 alone is also latched by the rift button (and potentially other
+// Alt-clicked HUD controls), while the existing structured probes show a real Escape menu setting
+// both ui+0x17a9 and ui+0x9c5a together. Only an exact byte value of 1 is a flag; padding is ignored.
+[[nodiscard]] std::uint32_t classify_panel_open_flags(std::uint8_t inventory, std::uint8_t quest,
+    std::uint8_t skills, std::uint8_t map, std::uint8_t escape_primary, std::uint8_t escape_confirm,
+    std::uint8_t factions, std::uint8_t loot_filter) noexcept;
+
 // Per-frame fraction of the remaining yaw gap to close for a catch-up rate and a frame time. Returns 0
 // for a zero rate or an unusable frame time, so a stalled or huge frame never jumps the camera.
 [[nodiscard]] float yaw_catchup_fraction(float per_second, float delta_seconds) noexcept;
@@ -92,6 +101,9 @@ struct MouseLookRect
 struct MouseLookInput
 {
     bool eligible{};
+    // True only when the game's own input mode is keyboard/mouse. Controller and unreadable modes
+    // release capture; the next mouse-mode frame re-enters through the normal zero-delta capture edge.
+    bool mouse_input_active{};
     bool alt_down{};
     bool menu_raw{};     // this frame's undebounced menu signal
     bool combat{};       // phase 1: always false

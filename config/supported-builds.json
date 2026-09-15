@@ -20,6 +20,16 @@
               "prefixHex": "40534883ec40488bd9ff15f98c3400"
             },
             {
+              "name": "?Update@GameCamera@GAME@@UEAAXXZ",
+              "rva": 2802656,
+              "prefixHex": "488bc4574881eca00000000f2970e8"
+            },
+            {
+              "name": "?Shake@GameCamera@GAME@@QEAAXAEBVViewport@2@HMAEBVWorldVec3@2@_N@Z",
+              "rva": 2798400,
+              "prefixHex": "48895c241048896c2418574881ec7004"
+            },
+            {
               "name": "?GetPlayer@GameCamera@GAME@@QEAAPEAVPlayer@2@XZ",
               "rva": 2797680,
               "prefixHex": "488b8118010000c3"

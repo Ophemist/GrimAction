@@ -37,6 +37,21 @@ bool gdtpc::valid_mouse_look_settings(const MouseLookSettings& s) noexcept
         std::isfinite(s.pitch_floor_degrees) && s.pitch_floor_degrees >= -80.0F && s.pitch_floor_degrees <= 45.0F;
 }
 
+std::uint32_t gdtpc::classify_panel_open_flags(const std::uint8_t inventory, const std::uint8_t quest,
+    const std::uint8_t skills, const std::uint8_t map, const std::uint8_t escape_primary,
+    const std::uint8_t escape_confirm, const std::uint8_t factions, const std::uint8_t loot_filter) noexcept
+{
+    std::uint32_t flags = 0;
+    if (inventory == 1) flags |= 1U << 0;
+    if (quest == 1) flags |= 1U << 1;
+    if (skills == 1) flags |= 1U << 2;
+    if (map == 1) flags |= 1U << 3;
+    if (escape_primary == 1 && escape_confirm == 1) flags |= 1U << 4;
+    if (factions == 1) flags |= 1U << 5;
+    if (loot_filter == 1) flags |= 1U << 6;
+    return flags;
+}
+
 float gdtpc::yaw_catchup_fraction(const float per_second, const float delta_seconds) noexcept
 {
     if (!std::isfinite(per_second) || !std::isfinite(delta_seconds) || per_second <= 0.0F ||
@@ -129,7 +144,7 @@ gdtpc::MouseLookDecision gdtpc::MouseLookModel::step(const MouseLookInput& input
     decision.menu = menu_;
     decision.aim_y = aim_y_;
     if (!settings_.enabled || !valid_) decision.state = MouseLookState::disabled;
-    else if (!input.eligible || !usable_rect(input.client)) decision.state = MouseLookState::ineligible;
+    else if (!input.eligible || !input.mouse_input_active || !usable_rect(input.client)) decision.state = MouseLookState::ineligible;
     else if (input.alt_down) decision.state = MouseLookState::alt;
     else if (menu_ && !input.combat) decision.state = MouseLookState::menu;
     else decision.state = MouseLookState::captured;
