@@ -112,14 +112,17 @@ and format string have the same column count. Logs are local only.
 
 ## What doesn't work (yet)
 
-- **Hiding the game's hand cursor.** The game draws it itself in the SteamStub-protected executable. The optional ReShade
-  effect `extras/reshade/ThirdPersonDot.fx` draws a dot at the cursor instead.
-- **Right-stick pitch.** Persistent GameEngine/UI/InputDevice probes found no axis. With the player's explicit approval,
-  the runtime now hooks exact-build-validated `SteamControllerDevice::Update`, calls native first, and observes its completed
-  event vector without modifying or suppressing events. Live identification of the camera action id is pending. XInput
-  polling remains prohibited.
+- **Hiding the game's hand cursor from inside the runtime.** The game draws it itself in the SteamStub-protected
+  executable. Two optional extras work around it: `extras/hidden-hand-cursor` replaces the cursor texture in the game's
+  own `UI.arc` with a dot (the only thing that edits a game file, and only when the player runs it), and
+  `extras/reshade/ThirdPersonDot.fx` draws a dot over the frame instead.
 - **Aim magnetism.** Scaling the game's native selection bias had no effect; a real version would need a cursor snap.
-- `mouse_look_dot_cursor` and `right_stick_pitch_*` are parsed and validated but have no effect.
+- `mouse_look_dot_cursor` is parsed and validated but has no effect.
+
+Right-stick pitch **works** as of 0.2.0. Persistent GameEngine/UI/InputDevice probes found no axis, so with the player's
+explicit approval the runtime hooks exact-build-validated `SteamControllerDevice::Update`, calls the original first, and
+only observes its completed event vector, never modifying, suppressing or synthesizing events. The camera action id was
+identified in a marked live session before any pitch write. XInput polling remains prohibited.
 
 ## Adding support for a new game build
 

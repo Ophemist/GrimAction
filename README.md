@@ -5,6 +5,7 @@ controller movement, and F8 switches between the normal camera and third person.
 
 - Mouse look with aim that follows the camera, plus automatic cursor release for menus, NPC dialog and Left Alt
 - Camera collision, smooth zoom that doesn't shorten targeting reach, and shoulder views (F9)
+- Controller support: the right stick tilts the camera, and switching back to keyboard and mouse recaptures cleanly
 - Nothing installed into the game folder: start it from the main menu, quit the game to remove it
 - Fails closed: it refuses to load on any game build it wasn't made for
 
@@ -36,11 +37,12 @@ config/               supported build constants, example settings, prohibited re
 scripts/              build, validate, run, package
 package/              player launcher scripts
 extras/reshade/       optional aim-dot ReShade effect
+extras/hidden-hand-cursor/  optional dot-cursor replacement for the game's hand cursor
 third_party/detours   pinned Microsoft Detours 4.0.1 source (MIT)
 ```
 
-Help wanted: right-stick pitch for controllers, hiding the game's hand cursor, and aim magnetism. See "What doesn't work
-(yet)" in DESIGN.md.
+Help wanted: hiding the game's hand cursor from inside the runtime, and aim magnetism. See "What doesn't work (yet)" in
+DESIGN.md.
 
 ## License
 
