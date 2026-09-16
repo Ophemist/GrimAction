@@ -1,9 +1,9 @@
 #pragma once
 
 // Read-only menu-detection probe. The player marks moments with a panel open or everything closed,
-// and each mark captures a snapshot of the GameEngine object, the UI object it points to, and the
-// private heap objects the start of the UI object points to. Offline analysis then looks for bytes
-// that consistently separate "open" from "closed".
+// and each mark captures a snapshot of the GameEngine object, the UI object it points to, the engine's
+// InputDevice, and bounded private-heap children of the UI/InputDevice roots. Offline analysis then
+// looks for bytes that consistently separate marked states.
 //
 // Deliberately free of Win32, like camera_collision_model: the live adapter supplies UiProbeMemory,
 // so which pointers are followed and how every record is laid out is provable against a fake.
@@ -19,7 +19,14 @@
 namespace gdtpc
 {
 enum class UiProbeLabel : std::uint32_t { open = 1, closed = 2 };
-enum class UiProbeBlockKind : std::uint32_t { engine = 0, ui = 1, ui_child = 2 };
+enum class UiProbeBlockKind : std::uint32_t
+{
+    engine = 0,
+    ui = 1,
+    ui_child = 2,
+    input_device = 3,
+    input_child = 4
+};
 
 inline constexpr std::size_t ui_probe_header_bytes = 64;
 inline constexpr std::size_t ui_probe_block_header_bytes = 24;
@@ -43,6 +50,10 @@ struct UiProbeLimits
     std::size_t pointer_scan_bytes{0x4000}; // only the start of the UI object is scanned for pointers
     std::size_t child_bytes{0x300};
     std::size_t max_children{2048};
+    std::size_t input_device_bytes{0x20000};
+    std::size_t input_pointer_scan_bytes{0x10000};
+    std::size_t input_child_bytes{0x800};
+    std::size_t max_input_children{512};
 };
 
 struct UiProbeMark
@@ -60,5 +71,6 @@ struct UiProbeMark
 // Writes exactly one record into `buffer` and returns its size, or 0 when nothing usable could be
 // captured (unreadable engine or UI root, or a buffer smaller than the bound). Never allocates.
 [[nodiscard]] std::size_t capture_ui_probe(UiProbeMemory& memory, std::uintptr_t engine, std::uintptr_t ui,
-    const UiProbeMark& mark, const UiProbeLimits& limits, std::uint8_t* buffer, std::size_t capacity) noexcept;
+    std::uintptr_t input_device, const UiProbeMark& mark, const UiProbeLimits& limits, std::uint8_t* buffer,
+    std::size_t capacity) noexcept;
 }

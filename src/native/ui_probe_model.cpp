@@ -41,15 +41,18 @@ bool append_block(gdtpc::UiProbeMemory& memory, const std::uintptr_t address, co
 
 std::size_t gdtpc::ui_probe_record_capacity(const UiProbeLimits& limits) noexcept
 {
-    return ui_probe_header_bytes + (2 + limits.max_children) * ui_probe_block_header_bytes +
-        limits.engine_bytes + limits.ui_bytes + limits.max_children * limits.child_bytes;
+    return ui_probe_header_bytes + (3 + limits.max_children + limits.max_input_children) * ui_probe_block_header_bytes +
+        limits.engine_bytes + limits.ui_bytes + limits.max_children * limits.child_bytes + limits.input_device_bytes +
+        limits.max_input_children * limits.input_child_bytes;
 }
 
 std::size_t gdtpc::capture_ui_probe(UiProbeMemory& memory, const std::uintptr_t engine, const std::uintptr_t ui,
-    const UiProbeMark& mark, const UiProbeLimits& limits, std::uint8_t* const buffer, const std::size_t capacity) noexcept
+    const std::uintptr_t input_device, const UiProbeMark& mark, const UiProbeLimits& limits,
+    std::uint8_t* const buffer, const std::size_t capacity) noexcept
 {
     if (buffer == nullptr || capacity < ui_probe_record_capacity(limits) || engine < lowest_pointer ||
-        ui < lowest_pointer || engine > highest_user_pointer || ui > highest_user_pointer) return 0;
+        ui < lowest_pointer || input_device < lowest_pointer || engine > highest_user_pointer ||
+        ui > highest_user_pointer || input_device > highest_user_pointer) return 0;
 
     auto cursor = ui_probe_header_bytes;
     if (!append_block(memory, engine, limits.engine_bytes, 0, UiProbeBlockKind::engine, false, buffer, cursor)) return 0;
@@ -67,7 +70,7 @@ std::size_t gdtpc::capture_ui_probe(UiProbeMemory& memory, const std::uintptr_t 
         std::memcpy(&value, buffer + ui_data + offset, sizeof(value));
         const auto pointer = static_cast<std::uintptr_t>(value);
         if (pointer < lowest_pointer || pointer > highest_user_pointer || (pointer & 0x7) != 0 ||
-            pointer == engine || pointer == ui) continue;
+            pointer == engine || pointer == ui || pointer == input_device) continue;
         // The same child is often referenced from several members; capture it once, at its first
         // referencing offset, so analysis keys it stably.
         auto duplicate = false;
@@ -81,6 +84,36 @@ std::size_t gdtpc::capture_ui_probe(UiProbeMemory& memory, const std::uintptr_t 
         if (!append_block(memory, pointer, limits.child_bytes, offset, UiProbeBlockKind::ui_child, true, buffer, cursor))
             continue;
         ++children;
+        ++blocks;
+    }
+
+    const auto input_data = cursor + ui_probe_block_header_bytes;
+    if (!append_block(memory, input_device, limits.input_device_bytes, 0, UiProbeBlockKind::input_device, true,
+        buffer, cursor)) return 0;
+    const auto input_captured = cursor - input_data;
+    ++blocks;
+    const auto input_scan = input_captured < limits.input_pointer_scan_bytes
+        ? input_captured : limits.input_pointer_scan_bytes;
+    std::size_t input_children = 0;
+    for (std::size_t offset = 0; offset + sizeof(std::uint64_t) <= input_scan &&
+         input_children < limits.max_input_children; offset += sizeof(std::uint64_t))
+    {
+        std::uint64_t value = 0;
+        std::memcpy(&value, buffer + input_data + offset, sizeof(value));
+        const auto pointer = static_cast<std::uintptr_t>(value);
+        if (pointer < lowest_pointer || pointer > highest_user_pointer || (pointer & 0x7) != 0 ||
+            pointer == engine || pointer == ui || pointer == input_device) continue;
+        auto duplicate = false;
+        for (std::size_t earlier = 0; earlier < offset && !duplicate; earlier += sizeof(std::uint64_t))
+        {
+            std::uint64_t previous = 0;
+            std::memcpy(&previous, buffer + input_data + earlier, sizeof(previous));
+            duplicate = previous == value;
+        }
+        if (duplicate) continue;
+        if (!append_block(memory, pointer, limits.input_child_bytes, offset, UiProbeBlockKind::input_child, true,
+            buffer, cursor)) continue;
+        ++input_children;
         ++blocks;
     }
 

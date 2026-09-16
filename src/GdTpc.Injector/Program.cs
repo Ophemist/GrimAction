@@ -93,14 +93,15 @@ internal static class InjectorProgram
             var collisionEnabled=BitConverter.ToUInt32(returned,ResultOffset+80);
             var expectedWrites=gate > 0 ? 1U : 0U;
             var expectedCollision=gate==3 ? 1U : 0U;
-            if(completed!=1||abi!=RequestAbi||size!=StatusSize||phase!=LoggingActive||hooks!=1||writes!=expectedWrites||
+            var expectedHooks=gate==3 ? 2U : 1U;
+            if(completed!=1||abi!=RequestAbi||size!=StatusSize||phase!=LoggingActive||hooks!=expectedHooks||writes!=expectedWrites||
                writerHealth!=1||configLoaded!=1||controlWrites!=0||restoreWrites!=0||collisionEnabled!=expectedCollision)
                 return Fail($"Invalid/inactive status (completed={completed}, abi={abi}, size={size}, phase={phase}, hooks={hooks}, writes={writes}, writer_health={writerHealth}, config_loaded={configLoaded}, control_writes={controlWrites}, restore_writes={restoreWrites}, collision_enabled={collisionEnabled}). Do not retry or unload; exit the game normally.",13);
             game.Refresh();
             for(var index=0;index<guarded.Count;index++)
                 if(FindRemoteModule(game,guarded[index])!=guardedBefore[index]||!CryptographicOperations.FixedTimeEquals(guardedHashes[index],Hash(guarded[index])))
                     return Fail("ReShade identity changed. Runtime may be active; exit normally and do not retry.",15);
-            Console.WriteLine($"PASS: Gate {gate} hook active; hooks=1; config_loaded=1; writer_health=healthy; game_state_writes_enabled={expectedWrites}; control_writes=0; restore_writes=0; output={log}"); return 0;
+            Console.WriteLine($"PASS: Gate {gate} hooks active; hooks={expectedHooks}; config_loaded=1; writer_health=healthy; game_state_writes_enabled={expectedWrites}; control_writes=0; restore_writes=0; output={log}"); return 0;
         }
         catch(Exception e) when(e is InvalidOperationException or IOException or UnauthorizedAccessException or Win32Exception or BadImageFormatException or ArgumentException or NotSupportedException or OverflowException){return Fail(e.Message,20);}
         finally{if(localRuntime!=0)NativeLibrary.Free(localRuntime);}
@@ -177,9 +178,10 @@ internal static class InjectorProgram
                 return Fail($"Logical stop did not reach stopped-resident (phase={phase}, hooks={hooks}, writer_health={writerHealth}).",18);
             if(writerHealth!=WriterComplete)
                 return Fail($"Stopped-resident was reported but the writer is not complete (writer_health={writerHealth}).",19);
-            if(hooks!=1||configLoaded!=1)
+            var expectedHooks=gate==3 ? 2U : 1U;
+            if(hooks!=expectedHooks||configLoaded!=1)
                 return Fail($"Stopped-resident status lost required state (hooks={hooks}, config_loaded={configLoaded}).",18);
-            Console.WriteLine($"PASS: Gate {gate} logical stop confirmed; phase=stopped_resident; writer complete; hooks=1 (original-only, still pinned); config_loaded=1; game_state_writes_enabled=0; restore_state={restoreState}; control_writes={controlWrites}; restore_writes={restoreWrites}");
+            Console.WriteLine($"PASS: Gate {gate} logical stop confirmed; phase=stopped_resident; writer complete; hooks={expectedHooks} (original-only, still pinned); config_loaded=1; game_state_writes_enabled=0; restore_state={restoreState}; control_writes={controlWrites}; restore_writes={restoreWrites}");
             return 0;
         }
         catch(Exception e) when(e is InvalidOperationException or IOException or UnauthorizedAccessException or Win32Exception or BadImageFormatException or ArgumentException or NotSupportedException or OverflowException){return Fail(e.Message,20);}
@@ -213,7 +215,8 @@ internal static class InjectorProgram
             var control=BitConverter.ToUInt64(returned,FaultResultOffset+64);var restored=BitConverter.ToUInt64(returned,FaultResultOffset+72);
             var controlBefore=BitConverter.ToUInt64(returned,FaultControlBeforeOffset);var restoreBefore=BitConverter.ToUInt64(returned,FaultRestoreBeforeOffset);
             var expectedRestoreDelta=gate>=2 ? 11UL : 10UL;
-            if(completed!=1||abi!=RequestAbi||size!=StatusSize||phase!=LoggingActive||hooks!=1||writes!=0||writer!=1||restore!=2||
+            var expectedHooks=gate==3 ? 2U : 1U;
+            if(completed!=1||abi!=RequestAbi||size!=StatusSize||phase!=LoggingActive||hooks!=expectedHooks||writes!=0||writer!=1||restore!=2||
                control!=controlBefore+4||restored!=restoreBefore+expectedRestoreDelta)
                 return Fail($"Recoverable-fault proof failed (completed={completed}, phase={phase}, hooks={hooks}, writes={writes}, writer={writer}, restore_state={restore}, control_delta={control-controlBefore}, restore_delta={restored-restoreBefore}). Exit normally; do not retry.",18);
             Console.WriteLine($"PASS: Gate {gate} controlled write refusal restored all {expectedRestoreDelta} native fields; restore_state=verified; control_writes_delta=4; restore_writes_delta={expectedRestoreDelta}; further control disabled.");return 0;

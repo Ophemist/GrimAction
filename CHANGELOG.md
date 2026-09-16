@@ -2,7 +2,11 @@
 
 All notable player-facing changes to GrimAction are recorded here.
 
-## Unreleased
+## 0.2.0 - 2026-09-15
+
+### Added
+
+- Controller right stick now tilts the camera up and down in third person. Tune it with `right_stick_pitch_degrees_per_second` and `right_stick_pitch_invert`, or turn it off with `right_stick_pitch_enabled=false`.
 
 ### Fixed
 

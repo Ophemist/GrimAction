@@ -413,6 +413,16 @@ int main()
             near(half, -4.5F, "half past the deadzone is not half speed", 0.01F);
             near(gdtpc::stick_pitch_degrees(32767, 90.0F, false, 0.5F), 0.0F, "an implausible frame time moved pitch");
             near(gdtpc::stick_pitch_degrees(32767, 0.0F, false, 0.1F), 0.0F, "a zero speed moved pitch");
+            near(gdtpc::steam_stick_pitch_degrees(-6.0F, 90.0F, false, 0.1F), -9.0F,
+                "Steam action 36 up does not look up at the configured speed");
+            near(gdtpc::steam_stick_pitch_degrees(6.0F, 90.0F, false, 0.1F), 9.0F,
+                "Steam action 36 down does not look down");
+            near(gdtpc::steam_stick_pitch_degrees(-3.0F, 90.0F, false, 0.1F), -4.5F,
+                "half Steam deflection is not half speed");
+            near(gdtpc::steam_stick_pitch_degrees(-20.0F, 90.0F, true, 0.1F), 9.0F,
+                "Steam action clamp/invert failed");
+            near(gdtpc::steam_stick_pitch_degrees(std::numeric_limits<float>::quiet_NaN(), 90.0F, false, 0.1F), 0.0F,
+                "nonfinite Steam action moved pitch");
 
             auto s = enabled_settings();
             s.pitch_offset_min = -20.0F;
@@ -434,6 +444,24 @@ int main()
             in.alt_down = true;
             in.pitch_stick_degrees = 10.0F;
             near(model.step(in).pitch_offset_degrees, -16.0F, "the stick moved pitch while Alt freed the cursor");
+
+            gdtpc::MouseLookModel controller_model(s);
+            auto controller = frame(600, 450);
+            controller.mouse_input_active = false;
+            controller.controller_input_active = true;
+            controller.native_pitch_valid = true;
+            controller.native_pitch_degrees = 10.0F;
+            controller.pitch_stick_degrees = -3.0F;
+            d = controller_model.step(controller);
+            require(d.state == gdtpc::MouseLookState::controller && !d.captured && !d.warp && d.apply_pitch,
+                "controller pitch captured or warped the cursor, or failed to hold the overlay");
+            near(d.pitch_offset_degrees, -3.0F, "controller-only state did not apply stick pitch");
+            controller.menu_raw = true;
+            controller.pitch_stick_degrees = -3.0F;
+            d = controller_model.step(controller);
+            require(d.state == gdtpc::MouseLookState::menu && d.apply_pitch,
+                "controller menu did not suspend input while holding pitch");
+            near(d.pitch_offset_degrees, -3.0F, "controller pitch moved while a menu was open");
         }
 
         std::cout << "PASS: panel flag classification with paired Escape confirmation and lone Alt-click rejection, right-stick pitch, dot cursor handle ownership, NPC conversation classification, vertical look pitch-then-aim spill with reversal, pitch held through Alt and menus, catch-up and pitch clamps, mouse-look settings validation, disabled and invalid configurations, capture-edge "

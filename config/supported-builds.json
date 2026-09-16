@@ -166,12 +166,26 @@
               "name": "?Get@?$Singleton@VObjectManager@GAME@@@GAME@@SAPEAVObjectManager@2@XZ",
               "rva": 114752,
               "prefixHex": "40534883ec3048c7442420feffffff"
+            },
+            {
+              "name": "?GetInputDevice@Engine@GAME@@QEAAPEAVInputDevice@2@XZ",
+              "rva": 489552,
+              "prefixHex": "488b8100020000c3"
+            },
+            {
+              "name": "?Update@SteamControllerDevice@GAME@@QEAAXH@Z",
+              "rva": 1820016,
+              "prefixHex": "488bc455535741564157488d68a1"
             }
           ],
           "dataExports": [
             {
               "name": "??_7WinWindow@GAME@@6B@",
               "rva": 3404960
+            },
+            {
+              "name": "?gEngine@GAME@@3PEAVEngine@1@EA",
+              "rva": 4330536
             }
           ]
         }

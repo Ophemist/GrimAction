@@ -114,8 +114,10 @@ and format string have the same column count. Logs are local only.
 
 - **Hiding the game's hand cursor.** The game draws it itself in the SteamStub-protected executable. The optional ReShade
   effect `extras/reshade/ThirdPersonDot.fx` draws a dot at the cursor instead.
-- **Right-stick pitch.** The game applies right-stick yaw from input events inside the executable. There's no readable stick
-  field found yet; the next idea is probing the engine's InputDevice. XInput polling is prohibited.
+- **Right-stick pitch.** Persistent GameEngine/UI/InputDevice probes found no axis. With the player's explicit approval,
+  the runtime now hooks exact-build-validated `SteamControllerDevice::Update`, calls native first, and observes its completed
+  event vector without modifying or suppressing events. Live identification of the camera action id is pending. XInput
+  polling remains prohibited.
 - **Aim magnetism.** Scaling the game's native selection bias had no effect; a real version would need a cursor snap.
 - `mouse_look_dot_cursor` and `right_stick_pitch_*` are parsed and validated but have no effect.
 

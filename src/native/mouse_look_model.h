@@ -53,6 +53,11 @@ struct MouseLookSettings
 // (8689) rescaled to [0, 1], stick up looks up (negative offset) unless inverted. 0 for an unusable frame time or speed.
 [[nodiscard]] float stick_pitch_degrees(std::int16_t thumb_y, float degrees_per_second, bool invert, float delta_seconds) noexcept;
 
+// Pitch-offset degrees for Grim Dawn Steam action 36. Live identification measured its full-deflection Y near +/-6;
+// the game's Steam Input path has already applied its own deadzone. Negative is stick up and therefore looks up.
+[[nodiscard]] float steam_stick_pitch_degrees(float event_y, float degrees_per_second, bool invert,
+    float delta_seconds) noexcept;
+
 // Final pitch in radians for a native (engine-derived) pitch and an offset in degrees, clamped to
 // [floor, 89 degrees]; floor may be negative (above horizontal). Returns native if anything is nonfinite.
 [[nodiscard]] float apply_pitch_offset(float native_radians, float offset_degrees, float floor_degrees) noexcept;
@@ -90,7 +95,8 @@ enum class MouseLookState : std::uint32_t
     ineligible = 1, // not third person, not foreground, stopping, unreadable menu state, bad window...
     alt = 2,        // Left Alt held: cursor free
     menu = 3,       // menu open and not in combat: cursor free
-    captured = 4
+    captured = 4,
+    controller = 5  // controller camera active: pitch overlay held, OS cursor never captured or warped
 };
 
 struct MouseLookRect
@@ -104,6 +110,7 @@ struct MouseLookInput
     // True only when the game's own input mode is keyboard/mouse. Controller and unreadable modes
     // release capture; the next mouse-mode frame re-enters through the normal zero-delta capture edge.
     bool mouse_input_active{};
+    bool controller_input_active{};
     bool alt_down{};
     bool menu_raw{};     // this frame's undebounced menu signal
     bool combat{};       // phase 1: always false

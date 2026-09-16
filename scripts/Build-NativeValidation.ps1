@@ -77,6 +77,7 @@ $runtimeConfigTests = Join-Path $artifactRoot 'gdtpc_runtime_config_tests.exe'
 $aimMemoryTests = Join-Path $artifactRoot 'gdtpc_aim_memory_tests.exe'
 $collisionTests = Join-Path $artifactRoot 'gdtpc_camera_collision_tests.exe'
 $uiProbeTests = Join-Path $artifactRoot 'gdtpc_ui_probe_tests.exe'
+$controllerEventTests = Join-Path $artifactRoot 'gdtpc_controller_event_tests.exe'
 $mouseLookTests = Join-Path $artifactRoot 'gdtpc_mouse_look_tests.exe'
 $virtualZoomTests = Join-Path $artifactRoot 'gdtpc_virtual_zoom_tests.exe'
 $levelQueryTests = Join-Path $artifactRoot 'gdtpc_level_query_tests.exe'
@@ -242,6 +243,12 @@ Invoke-BuildStep -Step 'UI probe capture tests build' -Command $uiProbeCommand
 & $uiProbeTests
 if ($LASTEXITCODE -ne 0) { throw "UI probe capture tests exited with code $LASTEXITCODE." }
 
+$controllerEventTestsSource = Join-Path $nativeRoot 'controller_event_model_tests.cpp'
+$controllerEventCommand = "call `"$devcmd`" -arch=x64 -host_arch=x64 >nul && cl $common `"$controllerEventTestsSource`" /Fo`"$objRoot\controller_event_model_tests.obj`" /Fe`"$controllerEventTests`" /link /Brepro /DYNAMICBASE /NXCOMPAT /GUARD:CF"
+Invoke-BuildStep -Step 'Steam controller event observation tests build' -Command $controllerEventCommand
+& $controllerEventTests
+if ($LASTEXITCODE -ne 0) { throw "Steam controller event observation tests exited with code $LASTEXITCODE." }
+
 $mouseLookTestsSource = Join-Path $nativeRoot 'mouse_look_model_tests.cpp'
 $mouseLookCommand = "call `"$devcmd`" -arch=x64 -host_arch=x64 >nul && cl $common `"$runtimeMouseLookSource`" `"$mouseLookTestsSource`" /Fo`"$objRoot\\`" /Fe`"$mouseLookTests`" /link /Brepro /DYNAMICBASE /NXCOMPAT /GUARD:CF"
 Invoke-BuildStep -Step 'Mouse-look model tests build' -Command $mouseLookCommand
@@ -299,7 +306,7 @@ $stagedConfig = Join-Path $artifactRoot 'runtime.ini'
 Copy-Item -LiteralPath (Join-Path $projectRoot 'config\runtime.example.ini') -Destination $stagedConfig
 if ($CameraCollision) {
     # The collision variant stages its capabilities ON, so a live session exercises what it is for.
-    $collisionConfig = (Get-Content -Raw -LiteralPath $stagedConfig).Replace('collision_enabled=false', 'collision_enabled=true').Replace('zoom_step_enabled=false', 'zoom_step_enabled=true').Replace('shoulder_offset_enabled=false', 'shoulder_offset_enabled=true').Replace('mouse_look_enabled=false', 'mouse_look_enabled=true').Replace('virtual_zoom_enabled=false', 'virtual_zoom_enabled=true').Replace('third_person_far_plane_percent=100', 'third_person_far_plane_percent=95').Replace('npc_dialog_releases_cursor=false', 'npc_dialog_releases_cursor=true')
+    $collisionConfig = (Get-Content -Raw -LiteralPath $stagedConfig).Replace('collision_enabled=false', 'collision_enabled=true').Replace('zoom_step_enabled=false', 'zoom_step_enabled=true').Replace('shoulder_offset_enabled=false', 'shoulder_offset_enabled=true').Replace('mouse_look_enabled=false', 'mouse_look_enabled=true').Replace('virtual_zoom_enabled=false', 'virtual_zoom_enabled=true').Replace('third_person_far_plane_percent=100', 'third_person_far_plane_percent=95').Replace('npc_dialog_releases_cursor=false', 'npc_dialog_releases_cursor=true').Replace('right_stick_pitch_enabled=false', 'right_stick_pitch_enabled=true')
     if ($UiProbe) { $collisionConfig = $collisionConfig.Replace('ui_probe_enabled=false', 'ui_probe_enabled=true') }
     [System.IO.File]::WriteAllText($stagedConfig, $collisionConfig, [System.Text.UTF8Encoding]::new($false))
 }

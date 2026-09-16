@@ -73,6 +73,17 @@ float gdtpc::stick_pitch_degrees(const std::int16_t thumb_y, const float degrees
     return invert ? -degrees : degrees;
 }
 
+float gdtpc::steam_stick_pitch_degrees(const float event_y, const float degrees_per_second, const bool invert,
+    const float delta_seconds) noexcept
+{
+    constexpr float full_scale = 6.0F; // action 36 live: up mean -5.786, down mean +5.204, extrema near +/-6
+    if (!std::isfinite(event_y) || !std::isfinite(degrees_per_second) || degrees_per_second <= 0.0F ||
+        !std::isfinite(delta_seconds) || delta_seconds <= 0.0F || delta_seconds > 0.1F) return 0.0F;
+    const auto normalized = clamp_value(event_y / full_scale, -1.0F, 1.0F);
+    const auto degrees = normalized * degrees_per_second * delta_seconds;
+    return invert ? -degrees : degrees;
+}
+
 float gdtpc::apply_pitch_offset(const float native_radians, const float offset_degrees, const float floor_degrees) noexcept
 {
     constexpr float radians_per_degree = 0.01745329251994329577F;
@@ -144,44 +155,50 @@ gdtpc::MouseLookDecision gdtpc::MouseLookModel::step(const MouseLookInput& input
     decision.menu = menu_;
     decision.aim_y = aim_y_;
     if (!settings_.enabled || !valid_) decision.state = MouseLookState::disabled;
-    else if (!input.eligible || !input.mouse_input_active || !usable_rect(input.client)) decision.state = MouseLookState::ineligible;
+    else if (!input.eligible) decision.state = MouseLookState::ineligible;
     else if (input.alt_down) decision.state = MouseLookState::alt;
     else if (menu_ && !input.combat) decision.state = MouseLookState::menu;
+    else if (input.controller_input_active) decision.state = MouseLookState::controller;
+    else if (!input.mouse_input_active || !usable_rect(input.client)) decision.state = MouseLookState::ineligible;
     else decision.state = MouseLookState::captured;
 
     // The pitch offset keeps being applied while Alt or a menu frees the cursor, so the camera does not
     // snap back; it is only changed by captured movement.
-    decision.apply_pitch = decision.state == MouseLookState::captured || decision.state == MouseLookState::alt ||
-        decision.state == MouseLookState::menu;
+    decision.apply_pitch = decision.state == MouseLookState::captured || decision.state == MouseLookState::controller ||
+        decision.state == MouseLookState::alt || decision.state == MouseLookState::menu;
     decision.pitch_offset_degrees = pitch_offset_;
     const auto was_captured = captured_;
     captured_ = decision.state == MouseLookState::captured;
     decision.captured = captured_;
     decision.capture_edge = captured_ && !was_captured;
     decision.release_edge = !captured_ && was_captured;
-    if (!captured_) return decision;
-
-    const auto height = static_cast<float>(input.client.bottom - input.client.top);
-    // A resized or moved window, a failed cursor read, or a capture edge gives no trustworthy delta.
-    decision.reanchor = decision.capture_edge || !input.cursor_valid || !same_rect(input.client, last_client_);
     auto pitch_min = settings_.pitch_offset_min;
     if (input.native_pitch_valid && std::isfinite(input.native_pitch_degrees))
     {
         const auto floor_offset = settings_.pitch_floor_degrees - input.native_pitch_degrees;
         if (floor_offset > pitch_min) pitch_min = floor_offset > 0.0F ? 0.0F : floor_offset;
     }
+    // The right stick has no cursor delta to lose. Controller mode is the live path; accepting a fresh
+    // sample on a mouse capture frame also makes a device switch continuous without a dropped event.
+    if ((decision.state == MouseLookState::controller || decision.state == MouseLookState::captured) &&
+        std::isfinite(input.pitch_stick_degrees) &&
+        input.pitch_stick_degrees != 0.0F)
+    {
+        const auto low = pitch_offset_ < pitch_min ? pitch_offset_ : pitch_min;
+        pitch_offset_ = clamp_value(pitch_offset_ + input.pitch_stick_degrees, low, settings_.pitch_offset_max);
+    }
+    decision.pitch_offset_degrees = pitch_offset_;
+    if (!captured_) return decision;
+
+    const auto height = static_cast<float>(input.client.bottom - input.client.top);
+    // A resized or moved window, a failed cursor read, or a capture edge gives no trustworthy delta.
+    decision.reanchor = decision.capture_edge || !input.cursor_valid || !same_rect(input.client, last_client_);
     if (!decision.reanchor)
     {
         const auto dx = static_cast<float>(input.cursor_x - last_warp_x_);
         const auto dy = static_cast<float>(input.cursor_y - last_warp_y_);
         decision.yaw_delta = dx * settings_.yaw_radians_per_pixel * (settings_.invert_x ? -1.0F : 1.0F);
         slide_vertical(dy, height, pitch_min);
-    }
-    // The right stick has no cursor delta to lose on a re-anchor, and never spills into the aim band.
-    if (std::isfinite(input.pitch_stick_degrees) && input.pitch_stick_degrees != 0.0F)
-    {
-        const auto low = pitch_offset_ < pitch_min ? pitch_offset_ : pitch_min;
-        pitch_offset_ = clamp_value(pitch_offset_ + input.pitch_stick_degrees, low, settings_.pitch_offset_max);
     }
     decision.pitch_offset_degrees = pitch_offset_;
     decision.aim_y = aim_y_;

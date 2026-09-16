@@ -20,6 +20,7 @@
 #include "ui_probe_model.h"
 #include "mouse_look_model.h"
 #include "virtual_zoom_model.h"
+#include "controller_event_model.h"
 #endif
 
 #include <array>
@@ -58,6 +59,11 @@ std::atomic<std::uint32_t> config_loaded{0};
 using UpdateFromInput = void(__fastcall*)(void* camera);
 UpdateFromInput update_from_input_original{};
 gdtpc::DetourHook update_from_input_hook;
+#if defined(GDTPC_CAMERA_COLLISION)
+using SteamControllerUpdate = void(__fastcall*)(void* device, int elapsed_ms);
+SteamControllerUpdate steam_controller_update_original{};
+gdtpc::DetourHook steam_controller_update_hook;
+#endif
 HANDLE logging_thread{};
 HANDLE logging_stop_event{};
 std::atomic<std::uint32_t> writer_health{0}; // 0=inactive, 1=healthy, 2=failed, 3=stop pending, 4=complete
@@ -123,6 +129,8 @@ std::uintptr_t control_engine{};
 std::uintptr_t control_player{};
 #if defined(GDTPC_CAMERA_COLLISION)
 gdtpc::LevelQueryEntries collision_entries{};
+void* const* core_engine_slot{};
+GetEngineObject get_input_device{};
 std::optional<gdtpc::CameraCollisionModel> collision_model;
 std::optional<gdtpc::ZoomStepModel> zoom_step_model;
 std::optional<gdtpc::ShoulderOffsetModel> shoulder_offset_model;
@@ -221,9 +229,17 @@ std::atomic<std::uint32_t> dot_cursor_status{0};
 // 3 map 0xa2da, 4 Escape confirmed by both 0x17a9 and 0x9c5a. The first Escape byte alone is also
 // latched by the rift button, so treating it as a panel drops mouse look after that and other Alt clicks.
 std::atomic<std::uint32_t> panel_open_flags_status{0xFFFFFFFFU};
-// Right-stick pitch. No stick source is wired: polling XInput in-process (build 20260913T214703813Z) saw no pad (the
-// controller reaches the game through Steam Input) and the game lost controller input for the rest of the session. The next
-// source is the game's own GameController state, pending a probe session.
+// Read-only Steam Input event probe. SteamControllerDevice::Update is called first and its native 16-byte event vector is
+// observed afterwards; the vector is never changed and every event continues through the game's original path.
+std::atomic<std::uint64_t> controller_event_updates{0};
+std::atomic<std::uint64_t> controller_event_epoch{0}; // odd while the event hook publishes a new snapshot
+std::atomic<std::uint32_t> controller_event_count_status{0};
+std::atomic<std::int32_t> controller_analog_action_status{-1};
+std::atomic<float> controller_analog_x_status{0.0F};
+std::atomic<float> controller_analog_y_status{0.0F};
+std::atomic<std::uint64_t> controller_event_faults{0};
+std::uint64_t controller_event_consumed_updates{}; // camera-thread only; never apply one Steam sample twice
+// Right-stick pitch uses only the live-proven camera action id 36. Native yaw, movement and events remain untouched.
 std::atomic<std::int32_t> right_stick_y_status{0};
 std::atomic<float> stick_pitch_status{0.0F};
 #endif
@@ -324,12 +340,21 @@ struct TelemetrySnapshot
     std::uint32_t controller_state_rva{0xFFFFFFFFU}; // player controller top state vtable, Game.dll RVA (0 none)
     std::uint32_t dot_cursor{};                       // 0 not applied, 1 dot shown, 2 window not found / write refused
     std::uint32_t panel_open_flags{0xFFFFFFFFU};      // menu-rule flag bytes (see panel_open_flags_status)
+    std::uint64_t controller_event_updates{};         // completed native SteamControllerDevice::Update calls observed
+    std::uint32_t controller_event_count{};           // native event-vector length from the latest update
+    std::int32_t controller_analog_action{-1};        // strongest analog action id, -1 when none
+    float controller_analog_x{};                      // untouched native analog X
+    float controller_analog_y{};                      // untouched native analog Y
+    std::uint64_t controller_event_faults{};          // guarded vector-read failures
     std::int32_t right_stick_y{};                     // right-stick Y fed to vertical look (0: no source wired yet)
     float stick_pitch_delta{};                        // pitch-offset degrees the stick asked for this frame
 };
 
 constexpr std::size_t telemetry_capacity = 256;
 gdtpc::TelemetryQueue<TelemetrySnapshot, telemetry_capacity> telemetry_queue{};
+#if defined(GDTPC_CAMERA_COLLISION)
+void sample_controller_event_status(TelemetrySnapshot& sample) noexcept;
+#endif
 
 struct AccessPoint
 {
@@ -367,6 +392,8 @@ constexpr std::uint8_t calculate_view_position_prefix[]{0x48, 0x89, 0x5c, 0x24, 
 constexpr std::uint8_t get_region_level_ptr_prefix[]{0x48, 0x8b, 0x41, 0x68, 0xc3};
 constexpr std::uint8_t get_level_intersection_prefix[]{0x48, 0x8b, 0xc4, 0x48, 0x89, 0x58, 0x08, 0x48, 0x89, 0x68, 0x10, 0x48, 0x89, 0x70, 0x18};
 constexpr std::uint8_t object_manager_get_prefix[]{0x40, 0x53, 0x48, 0x83, 0xec, 0x30, 0x48, 0xc7, 0x44, 0x24, 0x20, 0xfe, 0xff, 0xff, 0xff};
+constexpr std::uint8_t get_input_device_prefix[]{0x48, 0x8b, 0x81, 0x00, 0x02, 0x00, 0x00, 0xc3};
+constexpr std::uint8_t steam_controller_update_prefix[]{0x48, 0x8b, 0xc4, 0x55, 0x53, 0x57, 0x41, 0x56, 0x41, 0x57, 0x48, 0x8d, 0x68, 0xa1};
 // Unexported ObjectManager id lookup (Game.dll RVA 0x19D20), the routine CursorHandler::GetPlayerCtrl and the game's own
 // controller code use: (manager, id) -> object or null, under the manager's critical section. No export exists, so it is
 // validated by exact RVA and prefix on the hash-verified module, like the exported access points.
@@ -407,7 +434,9 @@ constexpr std::array engine_access_points{
     AccessPoint{"?CalculateViewPosition@WorldCamera@GAME@@MEBA?AVWorldVec3@2@AEBV32@@Z", calculate_view_position_prefix, std::size(calculate_view_position_prefix), 2265552},
     AccessPoint{"?GetLevelPtr@Region@GAME@@QEBAPEAVLevel@2@XZ", get_region_level_ptr_prefix, std::size(get_region_level_ptr_prefix), 1654688},
     AccessPoint{"?GetIntersection@Level@GAME@@QEBAXAEBVRay@2@AEAVIntersection@2@W4PhysicsSurface@2@PEAPEAVEntity@2@MPEBV62@_N@Z", get_level_intersection_prefix, std::size(get_level_intersection_prefix), 1244464},
-    AccessPoint{"?Get@?$Singleton@VObjectManager@GAME@@@GAME@@SAPEAVObjectManager@2@XZ", object_manager_get_prefix, std::size(object_manager_get_prefix), 114752}};
+    AccessPoint{"?Get@?$Singleton@VObjectManager@GAME@@@GAME@@SAPEAVObjectManager@2@XZ", object_manager_get_prefix, std::size(object_manager_get_prefix), 114752},
+    AccessPoint{"?GetInputDevice@Engine@GAME@@QEAAPEAVInputDevice@2@XZ", get_input_device_prefix, std::size(get_input_device_prefix), 489552},
+    AccessPoint{"?Update@SteamControllerDevice@GAME@@QEAAXH@Z", steam_controller_update_prefix, std::size(steam_controller_update_prefix), 1820016}};
 
 // Exported vtables (data, not code): identity checks for the player controller and its talk-to-NPC state.
 struct DataExport
@@ -416,7 +445,8 @@ struct DataExport
     std::uint32_t rva;
 };
 constexpr std::array engine_data_exports{
-    DataExport{"??_7WinWindow@GAME@@6B@", 3404960}}; // 0x33F4A0
+    DataExport{"??_7WinWindow@GAME@@6B@", 3404960}, // 0x33F4A0
+    DataExport{"?gEngine@GAME@@3PEAVEngine@1@EA", 4330536}}; // 0x421428
 constexpr std::array game_data_exports{
     DataExport{"??_7ControllerPlayer@GAME@@6B@", 7009280},
     DataExport{"??_7ControllerPlayerStateTalkToNpc@GAME@@6B@", 7417624}};
@@ -1847,6 +1877,7 @@ void capture_camera_state(void* camera_pointer, const gdtpc::CallbackEvidenceSna
     sample.controller_state_rva = controller_state_rva_status.load(std::memory_order_relaxed);
     sample.dot_cursor = dot_cursor_status.load(std::memory_order_relaxed);
     sample.panel_open_flags = panel_open_flags_status.load(std::memory_order_relaxed);
+    sample_controller_event_status(sample);
     sample.right_stick_y = right_stick_y_status.load(std::memory_order_relaxed);
     sample.stick_pitch_delta = stick_pitch_status.load(std::memory_order_relaxed);
 #endif
@@ -2095,6 +2126,9 @@ void force_release_mouse_look() noexcept
     mouse_look_pitch_status.store(0.0F, std::memory_order_relaxed);
     mouse_look_state_status.store(static_cast<std::uint32_t>(gdtpc::MouseLookState::ineligible), std::memory_order_relaxed);
     mouse_look_yaw_delta.store(0.0F, std::memory_order_relaxed);
+    controller_event_consumed_updates = controller_event_updates.load(std::memory_order_acquire);
+    right_stick_y_status.store(0, std::memory_order_relaxed);
+    stick_pitch_status.store(0.0F, std::memory_order_relaxed);
 }
 
 // An 11x11 white dot with a soft dark rim, hotspot at the centre, as a 32-bit alpha cursor.
@@ -2319,6 +2353,7 @@ void run_mouse_look(void* camera, const ObservedControlIdentity& before) noexcep
     {
         mouse_look_model->reset();
         mouse_look_warp_failed = false;
+        controller_event_consumed_updates = controller_event_updates.load(std::memory_order_acquire);
         mouse_look_generation = control_generation;
     }
 
@@ -2332,6 +2367,7 @@ void run_mouse_look(void* camera, const ObservedControlIdentity& before) noexcep
     guarded_read_menu_signal(input.menu_raw, menu_readable, panel_flags);
     std::uint32_t input_mode = 0xFFFFFFFFU;
     input.mouse_input_active = stable && guarded_read_mouse_input_mode(after.engine, input_mode) && input_mode == 0;
+    input.controller_input_active = stable && input_mode == 2;
     panel_open_flags_status.store(panel_flags, std::memory_order_relaxed);
     // The NPC conversation window is not panel state; the player controller's talk state stands in for it.
     const auto third_person_stable = stable &&
@@ -2363,10 +2399,20 @@ void run_mouse_look(void* camera, const ObservedControlIdentity& before) noexcep
         const auto stick_frequency = performance_frequency();
         const auto stick_dt = stick_frequency > 0 && mouse_look_last_tick != 0 && stick_tick > mouse_look_last_tick
             ? static_cast<float>(static_cast<double>(stick_tick - mouse_look_last_tick) / static_cast<double>(stick_frequency)) : 0.0F;
-        const std::int16_t stick_y = 0; // no stick source yet (see the note at the right-stick globals)
-        input.pitch_stick_degrees = gdtpc::stick_pitch_degrees(stick_y, active_config.right_stick_pitch_degrees_per_second,
-            active_config.right_stick_pitch_invert, stick_dt);
-        right_stick_y_status.store(stick_y, std::memory_order_relaxed);
+        TelemetrySnapshot event_sample{};
+        sample_controller_event_status(event_sample);
+        float event_y = 0.0F;
+        if (event_sample.controller_event_updates != controller_event_consumed_updates)
+        {
+            controller_event_consumed_updates = event_sample.controller_event_updates;
+            if (active_config.right_stick_pitch_enabled && input.controller_input_active &&
+                event_sample.controller_analog_action == 36)
+                event_y = event_sample.controller_analog_y;
+        }
+        input.pitch_stick_degrees = gdtpc::steam_stick_pitch_degrees(event_y,
+            active_config.right_stick_pitch_degrees_per_second, active_config.right_stick_pitch_invert, stick_dt);
+        const auto normalized = std::clamp(event_y / 6.0F, -1.0F, 1.0F);
+        right_stick_y_status.store(static_cast<std::int32_t>(std::lround(normalized * 32767.0F)), std::memory_order_relaxed);
         stick_pitch_status.store(input.pitch_stick_degrees, std::memory_order_relaxed);
     }
     const auto decision = mouse_look_model->step(input);
@@ -2442,13 +2488,16 @@ public:
 
 // Kept separate from run_ui_probe: MSVC refuses __try in a function that also holds an object
 // needing unwinding (the probe memory adapter).
-bool guarded_read_ui_roots(std::uintptr_t& engine, std::uintptr_t& ui) noexcept
+bool guarded_read_ui_roots(std::uintptr_t& engine, std::uintptr_t& ui, std::uintptr_t& input_device) noexcept
 {
     __try
     {
         engine = reinterpret_cast<std::uintptr_t>(*game_engine_slot);
         if (engine != 0) ui = reinterpret_cast<std::uintptr_t>(*reinterpret_cast<void* const*>(engine + 0x19b0));
-        return true;
+        auto* const core_engine = core_engine_slot == nullptr ? nullptr : *core_engine_slot;
+        if (core_engine != nullptr && get_input_device != nullptr)
+            input_device = reinterpret_cast<std::uintptr_t>(get_input_device(core_engine));
+        return engine != 0 && ui != 0 && input_device != 0;
     }
     __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
 }
@@ -2465,6 +2514,7 @@ void run_ui_probe() noexcept
     ui_probe_open_down = open_down;
     ui_probe_closed_down = closed_down;
     if (!active_config.ui_probe_enabled || open_edge == closed_edge || game_engine_slot == nullptr ||
+        core_engine_slot == nullptr || get_input_device == nullptr ||
         phase.load(std::memory_order_acquire) != GdTpcPhase::logging_active ||
         writer_health.load(std::memory_order_acquire) != 1) return;
     DWORD foreground_process = 0;
@@ -2473,7 +2523,8 @@ void run_ui_probe() noexcept
 
     std::uintptr_t engine = 0;
     std::uintptr_t ui = 0;
-    if (!guarded_read_ui_roots(engine, ui)) return;
+    std::uintptr_t input_device = 0;
+    if (!guarded_read_ui_roots(engine, ui, input_device)) return;
 
     auto expected = std::uint32_t{0};
     if (!ui_probe_state.compare_exchange_strong(expected, 1, std::memory_order_acq_rel)) return;
@@ -2483,7 +2534,7 @@ void run_ui_probe() noexcept
         callback_count.load(std::memory_order_relaxed), static_cast<std::uint64_t>(counter.QuadPart),
         camera_mode.load(std::memory_order_acquire), 1};
     WindowsUiProbeMemory memory;
-    const auto length = gdtpc::capture_ui_probe(memory, engine, ui, mark, gdtpc::UiProbeLimits{},
+    const auto length = gdtpc::capture_ui_probe(memory, engine, ui, input_device, mark, gdtpc::UiProbeLimits{},
         ui_probe_buffer, sizeof(ui_probe_buffer));
     ui_probe_length = length;
     ui_probe_state.store(length > 0 ? 2U : 0U, std::memory_order_release);
@@ -2500,6 +2551,78 @@ void flush_ui_probe(const HANDLE file) noexcept
         written != ui_probe_length)
         ui_probe_write_failures.fetch_add(1, std::memory_order_relaxed);
     ui_probe_state.store(0, std::memory_order_release);
+}
+
+void __fastcall steam_controller_update_logging_hook(void* device, const int elapsed_ms) noexcept
+{
+    const auto original = steam_controller_update_original;
+    if (original == nullptr) return;
+    original(device, elapsed_ms); // native handling always runs first and receives untouched arguments
+    if (phase.load(std::memory_order_acquire) != GdTpcPhase::logging_active) return;
+
+    std::uint32_t count = 0;
+    gdtpc::AnalogEventSample analog{};
+    bool faulted = false;
+    __try
+    {
+        if (device == nullptr) __leave;
+        const auto bytes = static_cast<const std::uint8_t*>(device);
+        const auto begin = *reinterpret_cast<const gdtpc::SteamControllerEvent* const*>(bytes + 0x10);
+        const auto end = *reinterpret_cast<const gdtpc::SteamControllerEvent* const*>(bytes + 0x18);
+        if (begin == nullptr && end == nullptr) __leave;
+        const auto begin_address = reinterpret_cast<std::uintptr_t>(begin);
+        const auto end_address = reinterpret_cast<std::uintptr_t>(end);
+        if (begin == nullptr || end == nullptr || end_address < begin_address ||
+            begin_address % alignof(gdtpc::SteamControllerEvent) != 0 ||
+            end_address % alignof(gdtpc::SteamControllerEvent) != 0 ||
+            (end_address - begin_address) % sizeof(gdtpc::SteamControllerEvent) != 0)
+        {
+            faulted = true;
+            __leave;
+        }
+        const auto native_count = static_cast<std::size_t>((end_address - begin_address) / sizeof(gdtpc::SteamControllerEvent));
+        if (native_count > 256)
+        {
+            faulted = true;
+            __leave;
+        }
+        count = static_cast<std::uint32_t>(native_count);
+        analog = gdtpc::select_strongest_analog_event(begin, native_count);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        faulted = true;
+    }
+
+    controller_event_epoch.fetch_add(1, std::memory_order_acq_rel);
+    controller_event_count_status.store(faulted ? 0U : count, std::memory_order_relaxed);
+    controller_analog_action_status.store(faulted || !analog.valid ? -1 : analog.action_id, std::memory_order_relaxed);
+    controller_analog_x_status.store(faulted || !analog.valid ? 0.0F : analog.x, std::memory_order_relaxed);
+    controller_analog_y_status.store(faulted || !analog.valid ? 0.0F : analog.y, std::memory_order_relaxed);
+    if (faulted) controller_event_faults.fetch_add(1, std::memory_order_relaxed);
+    controller_event_updates.fetch_add(1, std::memory_order_relaxed);
+    controller_event_epoch.fetch_add(1, std::memory_order_release);
+}
+
+void sample_controller_event_status(TelemetrySnapshot& sample) noexcept
+{
+    for (unsigned attempt = 0; attempt < 3; ++attempt)
+    {
+        const auto before = controller_event_epoch.load(std::memory_order_acquire);
+        if ((before & 1U) != 0) continue;
+        sample.controller_event_updates = controller_event_updates.load(std::memory_order_relaxed);
+        sample.controller_event_count = controller_event_count_status.load(std::memory_order_relaxed);
+        sample.controller_analog_action = controller_analog_action_status.load(std::memory_order_relaxed);
+        sample.controller_analog_x = controller_analog_x_status.load(std::memory_order_relaxed);
+        sample.controller_analog_y = controller_analog_y_status.load(std::memory_order_relaxed);
+        sample.controller_event_faults = controller_event_faults.load(std::memory_order_relaxed);
+        const auto after = controller_event_epoch.load(std::memory_order_acquire);
+        if (before == after) return;
+    }
+    sample.controller_event_count = 0;
+    sample.controller_analog_action = -1;
+    sample.controller_analog_x = 0.0F;
+    sample.controller_analog_y = 0.0F;
 }
 #endif
 
@@ -2570,12 +2693,12 @@ bool write_ascii(const HANDLE file, const char* text, const std::size_t length) 
     return WriteFile(file, text, static_cast<DWORD>(length), &written, nullptr) != FALSE && written == length;
 }
 
-constexpr char telemetry_header[] = "sequence,tick_ms,callbacks,generation,sample_valid,camera,player,world_yaw,world_pitch,world_fov,requested_yaw,zoom_blend,zoom_target_blend,zoom_a,zoom_b,facing_valid,facing_x,facing_y,facing_z,facing_heading,game_engine,ui,dialog_active,action_set,input_mode,foreground,dropped,callback_thread_id,hook_entry,original_return,owner_thread_id,owner_thread_mismatches,camera_mode,restore_state,writes_enabled,control_writes,restore_writes,abandoned_excursions,collision_arm,collision_desired,collision_state,collision_queries,collision_hits,collision_faults,collision_writes,toggle_down,toggle_edges,profile_transition,collision_write_result,zoom_step_clicks,main_thread_id,window_thread_id,cam28_x,cam28_y,cam28_z,cam94_x,cam94_y,cam94_z,camera_offset_x,camera_offset_y,camera_offset_z,target_offset_x,target_offset_y,target_offset_z,shoulder_side,shoulder_edges,shoulder_writes,menu_flag,menu_ui9918,menu_e1858,mouse_look_state,aim_y,yaw_delta,cursor_warps,cursor_escapes,mouse_yaw_writes,combat_state,combat_aux,panel_candidates,pitch_offset,pitch_writes,visual_distance,visual_arm,eye_pull,engine_distance,virtual_zoom_state,virtual_zoom_clicks,virtual_zoom_faults,camera_shake_suppressions,far_plane,render_far_plane,far_plane_percent,view_distance_locked,npc_talk,controller_state_rva,dot_cursor,panel_open_flags,right_stick_y,stick_pitch_delta\r\n";
+constexpr char telemetry_header[] = "sequence,tick_ms,callbacks,generation,sample_valid,camera,player,world_yaw,world_pitch,world_fov,requested_yaw,zoom_blend,zoom_target_blend,zoom_a,zoom_b,facing_valid,facing_x,facing_y,facing_z,facing_heading,game_engine,ui,dialog_active,action_set,input_mode,foreground,dropped,callback_thread_id,hook_entry,original_return,owner_thread_id,owner_thread_mismatches,camera_mode,restore_state,writes_enabled,control_writes,restore_writes,abandoned_excursions,collision_arm,collision_desired,collision_state,collision_queries,collision_hits,collision_faults,collision_writes,toggle_down,toggle_edges,profile_transition,collision_write_result,zoom_step_clicks,main_thread_id,window_thread_id,cam28_x,cam28_y,cam28_z,cam94_x,cam94_y,cam94_z,camera_offset_x,camera_offset_y,camera_offset_z,target_offset_x,target_offset_y,target_offset_z,shoulder_side,shoulder_edges,shoulder_writes,menu_flag,menu_ui9918,menu_e1858,mouse_look_state,aim_y,yaw_delta,cursor_warps,cursor_escapes,mouse_yaw_writes,combat_state,combat_aux,panel_candidates,pitch_offset,pitch_writes,visual_distance,visual_arm,eye_pull,engine_distance,virtual_zoom_state,virtual_zoom_clicks,virtual_zoom_faults,camera_shake_suppressions,far_plane,render_far_plane,far_plane_percent,view_distance_locked,npc_talk,controller_state_rva,dot_cursor,panel_open_flags,controller_event_updates,controller_event_count,controller_analog_action,controller_analog_x,controller_analog_y,controller_event_faults,right_stick_y,stick_pitch_delta\r\n";
 
 int format_telemetry_row(const TelemetrySnapshot& sample, char* line, const std::size_t capacity) noexcept
 {
     return std::snprintf(line, capacity,
-        "%llu,%llu,%llu,%llu,%u,0x%llx,0x%llx,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%u,%.9g,%.9g,%.9g,%.9g,0x%llx,0x%llx,%u,%u,%u,%u,%llu,%u,%llu,%llu,%u,%llu,%u,%u,%u,%llu,%llu,%llu,%.9g,%.9g,%u,%llu,%llu,%llu,%llu,%u,%llu,%u,%u,%llu,%u,%u,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%u,%llu,%llu,%u,0x%llx,0x%llx,%u,%.9g,%.9g,%llu,%llu,%llu,%u,%u,0x%x,%.9g,%llu,%.9g,%.9g,%.9g,%.9g,%u,%llu,%llu,%llu,%.9g,%.9g,%u,%u,%u,0x%x,%u,0x%x,%d,%.9g\r\n",
+        "%llu,%llu,%llu,%llu,%u,0x%llx,0x%llx,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%u,%.9g,%.9g,%.9g,%.9g,0x%llx,0x%llx,%u,%u,%u,%u,%llu,%u,%llu,%llu,%u,%llu,%u,%u,%u,%llu,%llu,%llu,%.9g,%.9g,%u,%llu,%llu,%llu,%llu,%u,%llu,%u,%u,%llu,%u,%u,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%.9g,%u,%llu,%llu,%u,0x%llx,0x%llx,%u,%.9g,%.9g,%llu,%llu,%llu,%u,%u,0x%x,%.9g,%llu,%.9g,%.9g,%.9g,%.9g,%u,%llu,%llu,%llu,%.9g,%.9g,%u,%u,%u,0x%x,%u,0x%x,%llu,%u,%d,%.9g,%.9g,%llu,%d,%.9g\r\n",
         static_cast<unsigned long long>(sample.sequence), static_cast<unsigned long long>(sample.tick_ms),
         static_cast<unsigned long long>(sample.callbacks), static_cast<unsigned long long>(sample.generation), sample.sample_valid,
         static_cast<unsigned long long>(sample.camera), static_cast<unsigned long long>(sample.player),
@@ -2620,6 +2743,9 @@ int format_telemetry_row(const TelemetrySnapshot& sample, char* line, const std:
         static_cast<unsigned long long>(sample.camera_shake_suppressions),
         sample.far_plane, sample.render_far_plane, sample.far_plane_percent, sample.view_distance_locked,
         sample.npc_talk, sample.controller_state_rva, sample.dot_cursor, sample.panel_open_flags,
+        static_cast<unsigned long long>(sample.controller_event_updates), sample.controller_event_count,
+        sample.controller_analog_action, sample.controller_analog_x, sample.controller_analog_y,
+        static_cast<unsigned long long>(sample.controller_event_faults),
         sample.right_stick_y, sample.stick_pitch_delta);
 }
 
@@ -2806,6 +2932,16 @@ GDTPC_API GdTpcPhase __cdecl GdTpcInitializeLoggingV2(const wchar_t* log_path, c
         mouse_look_pitch_apply = false;
         mouse_look_pitch_overlay.release();
         mouse_look_last_tick = 0;
+        controller_event_consumed_updates = 0;
+        controller_event_updates.store(0, std::memory_order_relaxed);
+        controller_event_epoch.store(0, std::memory_order_relaxed);
+        controller_event_count_status.store(0, std::memory_order_relaxed);
+        controller_analog_action_status.store(-1, std::memory_order_relaxed);
+        controller_analog_x_status.store(0.0F, std::memory_order_relaxed);
+        controller_analog_y_status.store(0.0F, std::memory_order_relaxed);
+        controller_event_faults.store(0, std::memory_order_relaxed);
+        right_stick_y_status.store(0, std::memory_order_relaxed);
+        stick_pitch_status.store(0.0F, std::memory_order_relaxed);
         mouse_look_pitch_status.store(0.0F, std::memory_order_relaxed);
         mouse_look_pitch_writes.store(0, std::memory_order_relaxed);
         virtual_zoom_model.emplace(gdtpc::virtual_zoom_settings(active_config));
@@ -2892,6 +3028,12 @@ GDTPC_API GdTpcPhase __cdecl GdTpcInitializeLoggingV2(const wchar_t* log_path, c
             GetProcAddress(game, "?SetZoom@GameCamera@GAME@@QEAAXM@Z"));
 #if defined(GDTPC_CAMERA_COLLISION)
         const auto engine = GetModuleHandleW(L"Engine.dll");
+        core_engine_slot = reinterpret_cast<void* const*>(
+            GetProcAddress(engine, engine_data_exports[1].name));
+        get_input_device = reinterpret_cast<GetEngineObject>(
+            GetProcAddress(engine, "?GetInputDevice@Engine@GAME@@QEAAPEAVInputDevice@2@XZ"));
+        steam_controller_update_original = reinterpret_cast<SteamControllerUpdate>(
+            GetProcAddress(engine, "?Update@SteamControllerDevice@GAME@@QEAAXH@Z"));
         collision_entries.get_region = reinterpret_cast<decltype(collision_entries.get_region)>(
             GetProcAddress(engine, "?GetRegion@WorldCamera@GAME@@QEBAPEAVRegion@2@XZ"));
         collision_entries.calculate_view_position = reinterpret_cast<decltype(collision_entries.calculate_view_position)>(
@@ -2931,13 +3073,26 @@ GDTPC_API GdTpcPhase __cdecl GdTpcInitializeLoggingV2(const wchar_t* log_path, c
 #if defined(GDTPC_GATE1_PROFILE_WRITES)
             get_engine_camera == nullptr || get_main_player == nullptr || set_camera_zoom == nullptr ||
 #if defined(GDTPC_CAMERA_COLLISION)
-            !collision_entries.complete() || object_manager_get == nullptr || object_manager_find == nullptr ||
+            !collision_entries.complete() || core_engine_slot == nullptr || get_input_device == nullptr ||
+            steam_controller_update_original == nullptr ||
+            object_manager_get == nullptr || object_manager_find == nullptr ||
             controller_player_vtable == 0 || talk_to_npc_vtable == 0 || win_window_vtable == 0 ||
 #endif
+#endif
+#if defined(GDTPC_CAMERA_COLLISION)
+            steam_controller_update_hook.attach(reinterpret_cast<void**>(&steam_controller_update_original),
+                reinterpret_cast<void*>(&steam_controller_update_logging_hook)) != NO_ERROR ||
 #endif
             update_from_input_hook.attach(reinterpret_cast<void**>(&update_from_input_original),
                 reinterpret_cast<void*>(&update_from_input_logging_hook)) != NO_ERROR)
         {
+            // Initialization never intentionally leaves a partial hook set. A detach failure is still safe because both
+            // replacements call only their originals while the phase is inert, but the module must remain resident and
+            // the game must be exited before any retry.
+            if (update_from_input_hook.installed()) static_cast<void>(update_from_input_hook.detach());
+#if defined(GDTPC_CAMERA_COLLISION)
+            if (steam_controller_update_hook.installed()) static_cast<void>(steam_controller_update_hook.detach());
+#endif
             // A bounded join keeps the remote initialization thread from blocking forever. On
             // timeout the worker keeps its own file/thread/event ownership and writer_health
             // stays at 3 (stop pending); nothing is reclaimed underneath it.
@@ -2951,7 +3106,11 @@ GDTPC_API GdTpcPhase __cdecl GdTpcInitializeLoggingV2(const wchar_t* log_path, c
             return phase.load(std::memory_order_acquire);
         }
 
+#if defined(GDTPC_CAMERA_COLLISION)
+        hooks_installed.store(2, std::memory_order_release);
+#else
         hooks_installed.store(1, std::memory_order_release);
+#endif
 #if defined(GDTPC_GATE1_PROFILE_WRITES)
         game_state_writes_enabled.store(1, std::memory_order_release);
 #endif

@@ -43,6 +43,7 @@ To stop: just quit the game. If you want the normal camera back without quitting
 | **WASD** | Move (the game's own movement) |
 | **Mouse wheel** | Zoom the camera in and out |
 | **F9** | Cycle the camera shoulder: center, right, left |
+| **Right stick** (controller) | Tilt the camera up and down |
 | **Hold Left Alt** | Free the mouse cursor (loot, click the world, use the UI) |
 | Open a menu | Inventory, character, skills, quests, map, stash, vendors and the Escape menu free the cursor automatically |
 | Talk to an NPC | Frees the cursor for the dialog |
@@ -52,8 +53,8 @@ You need WASD movement: in the game options, turn on movement with the keyboard 
 ## Known limits
 
 - **The game's hand cursor stays visible** in third person unless you apply the optional dot cursor (below).
-- **Controller:** a controller works with the game's own controller camera. The right stick turns but does not tilt the
-  camera up and down.
+- **Controller:** a controller works with the game's own controller camera, and the right stick now also tilts the camera
+  up and down (turn it off with `right_stick_pitch_enabled=false`).
 - **After an NPC dialog** the cursor stays free until you move; moving puts it back to mouse look.
 - **Menus not covered:** devotion, blacksmith, rift gates and the death screen don't free the cursor automatically. Hold Left
   Alt.
@@ -89,13 +90,16 @@ The settings most people will want:
 | `distance_default` | 42 | between `distance_min` and `distance_max` | Starting zoom |
 | `fov_degrees` | 45 | 30 to 60 | Field of view in third person |
 | `third_person_far_plane_percent` | 95 | 50 to 100 | View distance. Lower reduces hitches and cuts off the horizon sooner; extreme zoom keeps a safety floor so the camera cannot outrun the rendered world. |
+| `right_stick_pitch_enabled` | true | true / false | Controller right stick tilts the camera up and down |
+| `right_stick_pitch_degrees_per_second` | 90 | 10 to 360 | How fast the right stick tilts |
+| `right_stick_pitch_invert` | false | true / false | Flip the right stick's up and down |
 | `npc_dialog_releases_cursor` | true | true / false | Free the cursor while talking to NPCs |
 | `menu_release_frames` | 3 | 1 to 60 | Frames a menu must stay closed before mouse look returns |
 
 Leave these alone unless you know why you're changing them: `distance_min` and `collision_min_distance` (both 4; lower
 values stop F8 from switching back), `virtual_zoom_engine_distance`, the `collision_*` values, and the `[general]` section
-(fixed in this version: F8, starting in the normal camera). `mouse_look_dot_cursor` and the `right_stick_pitch_*` keys are
-reserved for features that don't work yet; leave them `false`.
+(fixed in this version: F8, starting in the normal camera). `mouse_look_dot_cursor` and `ui_probe_enabled` are reserved for
+features that don't work yet; leave them `false`.
 
 ## Dot cursor (optional)
 
